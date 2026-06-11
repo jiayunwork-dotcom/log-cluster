@@ -524,7 +524,7 @@ def _print_correlation_terminal(
         console.rule("[bold magenta]Top 因果链[/bold magenta]")
         console.print()
 
-        for i, chain in enumerate(result.chains[:5], 1):
+        for i, chain in enumerate(result.chains[:top_n], 1):
             title = Text(f"#{i} 因果链 (长度={chain.length}, 累计conf={chain.total_confidence:.4f})")
             title.stylize("bold")
             console.print(title)
@@ -551,10 +551,11 @@ def _print_correlation_terminal(
 def _output_correlation_json(
     result: CorrelationResult,
     templates: Dict[str, str],
+    top_n: int = 20,
 ):
     """JSON模式输出关联分析结果"""
     rules_data = []
-    for rule in result.rules:
+    for rule in result.rules[:top_n]:
         rule_dict = rule.to_dict()
         rule_dict["source_template"] = templates.get(
             rule.source_template_id, rule.source_template_id
@@ -564,7 +565,7 @@ def _output_correlation_json(
         )
         rules_data.append(rule_dict)
 
-    chains_data = [chain.to_dict() for chain in result.chains]
+    chains_data = [chain.to_dict() for chain in result.chains[:top_n]]
 
     output = {
         "summary": {
@@ -726,7 +727,7 @@ def correlate(
     corr_result = analyzer.analyze(template_timestamps, template_ids)
 
     if output_format == "json":
-        _output_correlation_json(corr_result, template_id_to_str)
+        _output_correlation_json(corr_result, template_id_to_str, top_n)
     else:
         _print_correlation_terminal(corr_result, template_id_to_str, top_n)
 

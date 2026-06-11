@@ -228,7 +228,7 @@ class CorrelationAnalyzer:
         result.rules = sorted(
             significant_rules + burst_rules, key=lambda r: r.lift, reverse=True
         )
-        result.chains = sorted(chains, key=lambda c: c.length, reverse=True)[:5]
+        result.chains = chains
 
         return result
 
@@ -356,6 +356,17 @@ class CorrelationAnalyzer:
                     cnt, sim_cnt = co_occurrence[key]
                     co_occurrence[key] = (cnt + 1, sim_cnt)
 
+        for (tid_a, tid_b) in simultaneous_pairs:
+            key_ab = (tid_a, tid_b)
+            key_ba = (tid_b, tid_a)
+            cnt_ab, sim_ab = co_occurrence[key_ab]
+            cnt_ba, sim_ba = co_occurrence[key_ba]
+            max_cnt = max(cnt_ab, cnt_ba)
+            if cnt_ab < max_cnt:
+                co_occurrence[key_ab] = (max_cnt, max_cnt)
+            if cnt_ba < max_cnt:
+                co_occurrence[key_ba] = (max_cnt, max_cnt)
+
     def _compute_rules(
         self,
         co_occurrence: Dict[Tuple[str, str], Tuple[int, int]],
@@ -374,19 +385,21 @@ class CorrelationAnalyzer:
             if a_count == 0 or b_count == 0:
                 continue
 
-            support = co_count / total_events
-            confidence = co_count / a_count if a_count > 0 else 0.0
+            effective_co_count = min(co_count, a_count, b_count)
+            effective_sim = min(sim_count, effective_co_count)
+
+            support = effective_co_count / total_events
+            confidence = effective_co_count / a_count if a_count > 0 else 0.0
             b_prob = b_count / total_events
             lift = confidence / b_prob if b_prob > 0 else 0.0
 
             e_ab = (a_count * b_count) / total_events
-            chi2 = ((co_count - e_ab) ** 2) / e_ab if e_ab > 0 else 0.0
+            chi2 = ((effective_co_count - e_ab) ** 2) / e_ab if e_ab > 0 else 0.0
 
-            effective_co = min(co_count, a_count, b_count)
-            union_count = a_count + b_count - effective_co
-            jaccard = effective_co / union_count if union_count > 0 else 0.0
+            union_count = a_count + b_count - effective_co_count
+            jaccard = effective_co_count / union_count if union_count > 0 else 0.0
 
-            is_simultaneous = (sim_count == co_count) and co_count > 0
+            is_simultaneous = (effective_sim == effective_co_count) and effective_co_count > 0
 
             is_burst = (a_id in burst_templates) or (b_id in burst_templates)
 
@@ -407,7 +420,7 @@ class CorrelationAnalyzer:
                 lift=lift,
                 chi2=chi2,
                 jaccard=jaccard,
-                co_count=co_count,
+                co_count=effective_co_count,
                 a_count=a_count,
                 b_count=b_count,
                 is_strong_correlation=is_strong,
@@ -419,6 +432,55 @@ class CorrelationAnalyzer:
 
         return rules
 
+    def _filter_bidirectional_edges(
+        self, rules: List[AssociationRule]
+    ) -> List[AssociationRule]:
+        """过滤双向边：对双向边方向筛选，优先保留置信度高的方向"""
+        if not rules:
+            return []
+
+        edge_map: Dict[Tuple[str, str], AssociationRule] = {}
+        for r in rules:
+            edge_map[(r.source_template_id, r.target_template_id)] = r
+
+        kept_rules: List[AssociationRule] = []
+        processed: Set[Tuple[str, str]] = set()
+
+        for (a, b), rule_ab in edge_map.items():
+            pair_key = tuple(sorted([a, b]))
+            if pair_key in processed:
+                continue
+            processed.add(pair_key)
+
+            rule_ba = edge_map.get((b, a))
+            if rule_ba is None:
+                kept_rules.append(rule_ab)
+                continue
+
+            conf_ab = rule_ab.confidence
+            conf_ba = rule_ba.confidence
+            co_ab = rule_ab.co_count
+            co_ba = rule_ba.co_count
+
+            conf_diff = abs(conf_ab - conf_ba)
+            co_diff_ratio = abs(co_ab - co_ba) / max(co_ab, co_ba, 1)
+
+            if conf_diff >= 0.05 or co_diff_ratio >= 0.05:
+                if conf_ab > conf_ba or (conf_ab == conf_ba and co_ab >= co_ba):
+                    kept_rules.append(rule_ab)
+                else:
+                    kept_rules.append(rule_ba)
+            else:
+                if rule_ab.is_simultaneous and rule_ba.is_simultaneous:
+                    pass
+                else:
+                    if conf_ab >= conf_ba:
+                        kept_rules.append(rule_ab)
+                    else:
+                        kept_rules.append(rule_ba)
+
+        return kept_rules
+
     def _find_causal_chains(
         self, rules: List[AssociationRule], template_ids: List[str]
     ) -> List[CausalChain]:
@@ -426,10 +488,12 @@ class CorrelationAnalyzer:
         if not rules:
             return []
 
+        filtered_rules = self._filter_bidirectional_edges(rules)
+
         graph: Dict[str, List[Tuple[str, float]]] = defaultdict(list)
         nodes: Set[str] = set()
 
-        for rule in rules:
+        for rule in filtered_rules:
             graph[rule.source_template_id].append(
                 (rule.target_template_id, rule.confidence)
             )
@@ -442,6 +506,9 @@ class CorrelationAnalyzer:
         for node in nodes:
             if node not in simple_graph:
                 simple_graph[node] = []
+
+        if not simple_graph:
+            return []
 
         tarjan = _TarjanSCC(simple_graph)
         sccs = tarjan.find_sccs()
@@ -502,23 +569,25 @@ class CorrelationAnalyzer:
                     prev[neighbor] = (node, weight)
 
         chains: List[CausalChain] = []
-        for sink in group_set:
-            if not condensed_graph.get(sink) and prev[sink] is not None:
-                chain = self._reconstruct_chain(
-                    sink, prev, group_to_nodes, condensed_graph
-                )
-                if chain.length >= 2:
-                    chains.append(chain)
+        sink_candidates = sorted(
+            group_set, key=lambda g: dist[g], reverse=True
+        )
+        for end_group in sink_candidates:
+            chain = self._reconstruct_chain(
+                end_group, prev, group_to_nodes, condensed_graph
+            )
+            if chain.length >= 2:
+                chains.append(chain)
 
-        if not chains:
-            for node in group_set:
-                chain = self._reconstruct_chain(
-                    node, prev, group_to_nodes, condensed_graph
-                )
-                if chain.length >= 2:
-                    chains.append(chain)
+        unique_chains: List[CausalChain] = []
+        seen_paths = set()
+        for c in chains:
+            path_key = tuple(c.path)
+            if path_key not in seen_paths:
+                seen_paths.add(path_key)
+                unique_chains.append(c)
 
-        return sorted(chains, key=lambda c: (c.length, c.total_confidence), reverse=True)
+        return sorted(unique_chains, key=lambda c: (c.length, c.total_confidence), reverse=True)
 
     def _reconstruct_chain(
         self,
