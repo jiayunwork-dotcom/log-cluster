@@ -1,0 +1,459 @@
+"""Drain算法 - 日志模板提取核心模块"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
+from .config import DrainConfig, PreprocessConfig
+from .parser import LogEntry
+
+
+@dataclass
+class TemplateStats:
+    """模板统计信息"""
+    count: int = 0
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    level_counts: Dict[str, int] = field(default_factory=dict)
+    sources: List[str] = field(default_factory=list)
+    
+    def update(self, entry: LogEntry):
+        """更新统计信息"""
+        self.count += 1
+        if entry.timestamp is not None:
+            if self.first_seen is None or entry.timestamp < self.first_seen:
+                self.first_seen = entry.timestamp
+            if self.last_seen is None or entry.timestamp > self.last_seen:
+                self.last_seen = entry.timestamp
+        
+        level = entry.normalized_level
+        self.level_counts[level] = self.level_counts.get(level, 0) + 1
+        
+        if entry.source and entry.source not in self.sources:
+            self.sources.append(entry.source)
+            if len(self.sources) > 100:
+                self.sources = self.sources[:100]
+
+
+@dataclass
+class LogTemplate:
+    """日志模板"""
+    template_id: str
+    template_str: str
+    tokens: List[str]
+    stats: TemplateStats = field(default_factory=TemplateStats)
+    is_new: bool = False
+    is_error: bool = False
+    is_periodic: bool = False
+    is_spike: bool = False
+    is_vanished: bool = False
+    is_rare: bool = False
+    cluster_id: str = ""
+    
+    def __post_init__(self):
+        if not self.template_str:
+            self.template_str = " ".join(self.tokens)
+    
+    def to_dict(self) -> dict:
+        return {
+            "template_id": self.template_id,
+            "template_str": self.template_str,
+            "tokens": self.tokens,
+            "stats": {
+                "count": self.stats.count,
+                "first_seen": self.stats.first_seen.isoformat() if self.stats.first_seen else None,
+                "last_seen": self.stats.last_seen.isoformat() if self.stats.last_seen else None,
+                "level_counts": self.stats.level_counts,
+                "sources": self.stats.sources,
+            },
+            "is_new": self.is_new,
+            "is_error": self.is_error,
+            "is_periodic": self.is_periodic,
+            "is_spike": self.is_spike,
+            "is_vanished": self.is_vanished,
+            "is_rare": self.is_rare,
+            "cluster_id": self.cluster_id,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "LogTemplate":
+        stats_data = data.get("stats", {})
+        stats = TemplateStats(
+            count=stats_data.get("count", 0),
+            first_seen=datetime.fromisoformat(stats_data["first_seen"]) if stats_data.get("first_seen") else None,
+            last_seen=datetime.fromisoformat(stats_data["last_seen"]) if stats_data.get("last_seen") else None,
+            level_counts=stats_data.get("level_counts", {}),
+            sources=stats_data.get("sources", []),
+        )
+        return cls(
+            template_id=data["template_id"],
+            template_str=data["template_str"],
+            tokens=data["tokens"],
+            stats=stats,
+            is_new=data.get("is_new", False),
+            is_error=data.get("is_error", False),
+            is_periodic=data.get("is_periodic", False),
+            is_spike=data.get("is_spike", False),
+            is_vanished=data.get("is_vanished", False),
+            is_rare=data.get("is_rare", False),
+            cluster_id=data.get("cluster_id", ""),
+        )
+
+
+class DrainNode:
+    """Drain前缀树节点"""
+    
+    def __init__(self, depth: int = 0):
+        self.depth = depth
+        self.children: Dict[str, "DrainNode"] = {}
+        self.templates: List[LogTemplate] = []
+    
+    def to_dict(self) -> dict:
+        return {
+            "depth": self.depth,
+            "children": {k: v.to_dict() for k, v in self.children.items()},
+            "templates": [t.to_dict() for t in self.templates],
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "DrainNode":
+        node = cls(depth=data["depth"])
+        node.children = {k: cls.from_dict(v) for k, v in data.get("children", {}).items()}
+        node.templates = [LogTemplate.from_dict(t) for t in data.get("templates", [])]
+        return node
+
+
+class LogPreprocessor:
+    """日志预处理器 - 替换变量部分"""
+    
+    def __init__(self, config: PreprocessConfig):
+        self.config = config
+        self._compiled_patterns: Dict[str, re.Pattern] = {}
+        self._order = config.order
+        
+        for pattern in config.patterns:
+            try:
+                self._compiled_patterns[pattern.name] = re.compile(pattern.regex)
+            except re.error:
+                pass
+    
+    def preprocess(self, message: str) -> str:
+        """预处理消息，替换变量部分"""
+        result = message
+        
+        for name in self._order:
+            pattern = self._compiled_patterns.get(name)
+            if pattern:
+                placeholder = f"<{name}>"
+                result = pattern.sub(placeholder, result)
+        
+        return result
+    
+    def tokenize(self, message: str) -> List[str]:
+        """将消息分词"""
+        preprocessed = self.preprocess(message)
+        tokens = preprocessed.split()
+        return tokens
+
+
+class Drain:
+    """Drain算法实现"""
+    
+    def __init__(self, config: DrainConfig, preprocessor: LogPreprocessor):
+        self.config = config
+        self.preprocessor = preprocessor
+        self.root = DrainNode(depth=0)
+        self.templates: Dict[str, LogTemplate] = {}
+        self._template_counter = 0
+    
+    def add_log_message(self, entry: LogEntry) -> LogTemplate:
+        """添加一条日志，返回匹配的模板"""
+        tokens = self.preprocessor.tokenize(entry.message)
+        if not tokens:
+            tokens = ["<EMPTY>"]
+        
+        template = self._match(tokens)
+        
+        if template is None:
+            template = self._create_template(tokens)
+            self._add_template_to_tree(template)
+        
+        template.stats.update(entry)
+        
+        if entry.normalized_level in ("ERROR", "FATAL"):
+            template.is_error = True
+        
+        return template
+    
+    def _match(self, tokens: List[str]) -> Optional[LogTemplate]:
+        """在前缀树中匹配模板"""
+        token_count = len(tokens)
+        count_key = str(token_count)
+        
+        if count_key not in self.root.children:
+            return None
+        
+        current_node = self.root.children[count_key]
+        
+        # 逐层匹配
+        for i in range(min(token_count, self.config.depth - 2)):
+            token = tokens[i]
+            if token in current_node.children:
+                current_node = current_node.children[token]
+            elif "<*>" in current_node.children:
+                current_node = current_node.children["<*>"]
+            else:
+                break
+        
+        # 在叶子节点的模板列表中查找最匹配的
+        best_template = None
+        best_sim = -1.0
+        
+        for template in current_node.templates:
+            sim = self._calculate_similarity(tokens, template.tokens)
+            if sim >= self.config.sim_th and sim > best_sim:
+                best_sim = sim
+                best_template = template
+        
+        return best_template
+    
+    def _calculate_similarity(self, tokens1: List[str], tokens2: List[str]) -> float:
+        """计算两个token序列的相似度"""
+        if len(tokens1) != len(tokens2):
+            return 0.0
+        
+        if len(tokens1) == 0:
+            return 1.0
+        
+        same_count = 0
+        for t1, t2 in zip(tokens1, tokens2):
+            if t1 == t2 or t1 == "<*>" or t2 == "<*>":
+                same_count += 1
+        
+        return same_count / len(tokens1)
+    
+    def _create_template(self, tokens: List[str]) -> LogTemplate:
+        """创建新模板"""
+        self._template_counter += 1
+        template_id = f"T{self._template_counter:06d}"
+        template_str = " ".join(tokens)
+        
+        template = LogTemplate(
+            template_id=template_id,
+            template_str=template_str,
+            tokens=tokens.copy(),
+            is_new=True,
+        )
+        
+        self.templates[template_id] = template
+        return template
+    
+    def _add_template_to_tree(self, template: LogTemplate):
+        """将模板添加到前缀树中"""
+        tokens = template.tokens
+        token_count = len(tokens)
+        count_key = str(token_count)
+        
+        if count_key not in self.root.children:
+            self.root.children[count_key] = DrainNode(depth=1)
+        
+        current_node = self.root.children[count_key]
+        
+        # 逐层创建节点
+        for i in range(min(token_count, self.config.depth - 2)):
+            token = tokens[i]
+            
+            # 如果子节点数超过maxChild，考虑使用通配符
+            if token not in current_node.children and len(current_node.children) >= self.config.max_child:
+                if "<*>" not in current_node.children:
+                    current_node.children["<*>"] = DrainNode(depth=current_node.depth + 1)
+                current_node = current_node.children["<*>"]
+            else:
+                if token not in current_node.children:
+                    current_node.children[token] = DrainNode(depth=current_node.depth + 1)
+                current_node = current_node.children[token]
+        
+        current_node.templates.append(template)
+    
+    def merge_templates(self):
+        """合并相似模板（只有一个token不同且其中一个是通配符）"""
+        changed = True
+        while changed:
+            changed = False
+            template_list = list(self.templates.values())
+            
+            for i in range(len(template_list)):
+                t1 = template_list[i]
+                if t1.template_id not in self.templates:
+                    continue
+                
+                for j in range(i + 1, len(template_list)):
+                    t2 = template_list[j]
+                    if t2.template_id not in self.templates:
+                        continue
+                    
+                    if len(t1.tokens) != len(t2.tokens):
+                        continue
+                    
+                    # 找出不同的位置
+                    diff_positions = []
+                    for pos, (tok1, tok2) in enumerate(zip(t1.tokens, t2.tokens)):
+                        if tok1 != tok2:
+                            diff_positions.append(pos)
+                    
+                    # 只有一个位置不同
+                    if len(diff_positions) == 1:
+                        pos = diff_positions[0]
+                        tok1 = t1.tokens[pos]
+                        tok2 = t2.tokens[pos]
+                        
+                        # 如果其中一个是通配符，或者两个都不是通配符则合并为通配符
+                        if tok1 == "<*>" or tok2 == "<*>":
+                            # 保留通配符模板，合并统计
+                            if tok1 == "<*>":
+                                self._merge_template_stats(t1, t2)
+                                self._remove_template_from_tree(t2)
+                                del self.templates[t2.template_id]
+                            else:
+                                self._merge_template_stats(t2, t1)
+                                self._remove_template_from_tree(t1)
+                                del self.templates[t1.template_id]
+                            changed = True
+                            break
+                        else:
+                            # 两个都不是通配符，合并为通配符模板
+                            new_tokens = t1.tokens.copy()
+                            new_tokens[pos] = "<*>"
+                            
+                            # 检查是否已有通配符模板
+                            existing = None
+                            for t in self.templates.values():
+                                if t.tokens == new_tokens:
+                                    existing = t
+                                    break
+                            
+                            if existing:
+                                self._merge_template_stats(existing, t1)
+                                self._merge_template_stats(existing, t2)
+                                self._remove_template_from_tree(t1)
+                                self._remove_template_from_tree(t2)
+                                del self.templates[t1.template_id]
+                                del self.templates[t2.template_id]
+                            else:
+                                # 创建新的通配符模板
+                                new_template = self._create_template(new_tokens)
+                                self._merge_template_stats(new_template, t1)
+                                self._merge_template_stats(new_template, t2)
+                                self._remove_template_from_tree(t1)
+                                self._remove_template_from_tree(t2)
+                                del self.templates[t1.template_id]
+                                del self.templates[t2.template_id]
+                                self._add_template_to_tree(new_template)
+                            
+                            changed = True
+                            break
+                
+                if changed:
+                    break
+    
+    def _merge_template_stats(self, target: LogTemplate, source: LogTemplate):
+        """合并两个模板的统计信息"""
+        target.stats.count += source.stats.count
+        
+        if source.stats.first_seen is not None:
+            if target.stats.first_seen is None or source.stats.first_seen < target.stats.first_seen:
+                target.stats.first_seen = source.stats.first_seen
+        
+        if source.stats.last_seen is not None:
+            if target.stats.last_seen is None or source.stats.last_seen > target.stats.last_seen:
+                target.stats.last_seen = source.stats.last_seen
+        
+        for level, count in source.stats.level_counts.items():
+            target.stats.level_counts[level] = target.stats.level_counts.get(level, 0) + count
+        
+        for src in source.stats.sources:
+            if src not in target.stats.sources:
+                target.stats.sources.append(src)
+        
+        if source.is_error:
+            target.is_error = True
+    
+    def _remove_template_from_tree(self, template: LogTemplate):
+        """从前缀树中移除模板（只从叶子节点移除，不删除空节点）"""
+        tokens = template.tokens
+        token_count = len(tokens)
+        count_key = str(token_count)
+        
+        if count_key not in self.root.children:
+            return
+        
+        current_node = self.root.children[count_key]
+        
+        for i in range(min(token_count, self.config.depth - 2)):
+            token = tokens[i]
+            if token in current_node.children:
+                current_node = current_node.children[token]
+            elif "<*>" in current_node.children:
+                current_node = current_node.children["<*>"]
+            else:
+                return
+        
+        current_node.templates = [t for t in current_node.templates if t.template_id != template.template_id]
+    
+    def get_templates_sorted(self) -> List[LogTemplate]:
+        """按出现频率排序的模板列表"""
+        return sorted(self.templates.values(), key=lambda t: t.stats.count, reverse=True)
+    
+    def get_template_count(self) -> int:
+        """获取模板总数"""
+        return len(self.templates)
+    
+    def to_dict(self) -> dict:
+        return {
+            "config": {
+                "depth": self.config.depth,
+                "st": self.config.st,
+                "max_child": self.config.max_child,
+                "sim_th": self.config.sim_th,
+            },
+            "template_counter": self._template_counter,
+            "templates": {k: v.to_dict() for k, v in self.templates.items()},
+            "root": self.root.to_dict(),
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict, preprocessor: LogPreprocessor) -> "Drain":
+        config_data = data.get("config", {})
+        config = DrainConfig(
+            depth=config_data.get("depth", 4),
+            st=config_data.get("st", 0.4),
+            max_child=config_data.get("max_child", 100),
+            sim_th=config_data.get("sim_th", 0.4),
+        )
+        
+        drain = cls(config, preprocessor)
+        drain._template_counter = data.get("template_counter", 0)
+        drain.templates = {k: LogTemplate.from_dict(v) for k, v in data.get("templates", {}).items()}
+        drain.root = DrainNode.from_dict(data.get("root", {}))
+        
+        return drain
+    
+    def compress(self, rare_count: int = 5) -> int:
+        """压缩模板树，将稀有模板标记为稀有
+        
+        Args:
+            rare_count: 匹配日志数小于此值的模板被标记为稀有
+        
+        Returns:
+            被标记为稀有的模板数量
+        """
+        rare_count_num = 0
+        
+        for template in self.templates.values():
+            if template.stats.count < rare_count and not template.is_rare:
+                template.is_rare = True
+                rare_count_num += 1
+        
+        return rare_count_num

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "log-cluster"
+version = "0.1.0"
+description = "日志模式自动聚类与异常模板发现工具"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    {name = "Log Cluster Team"}
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: System :: Logging",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "typer>=0.9.0",
+    "PyYAML>=6.0",
+    "rich>=13.0.0",
+    "python-dateutil>=2.8.0",
+]
+
+[project.scripts]
+log-cluster = "log_cluster.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["log_cluster*"]
