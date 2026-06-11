@@ -703,7 +703,7 @@ def correlate(
     if load_state is not None:
         loaded_corr_state = load_correlation_state(load_state)
         if loaded_corr_state is not None:
-            print(f"已加载关联状态: {load_state}")
+            print(f"已加载关联状态: {load_state}", file=sys.stderr)
 
     is_state = _is_state_file(file)
 
@@ -747,7 +747,7 @@ def correlate(
         state = analyzer.get_state()
         if state is not None:
             save_correlation_state(state, save_state)
-            print(f"关联状态已保存: {save_state}")
+            print(f"关联状态已保存: {save_state}", file=sys.stderr)
 
     if output_format == "json":
         _output_correlation_json(corr_result, template_id_to_str, top_n)
