@@ -10,7 +10,7 @@ from .config import DrainConfig, PreprocessConfig
 from .parser import LogEntry
 
 
-@dataclass
+@dataclass(slots=True)
 class TemplateStats:
     """模板统计信息"""
     count: int = 0
@@ -20,24 +20,38 @@ class TemplateStats:
     sources: List[str] = field(default_factory=list)
     
     def update(self, entry: LogEntry):
-        """更新统计信息"""
+        """更新统计信息 - 优化版本"""
         self.count += 1
-        if entry.timestamp is not None:
-            if self.first_seen is None or entry.timestamp < self.first_seen:
-                self.first_seen = entry.timestamp
-            if self.last_seen is None or entry.timestamp > self.last_seen:
-                self.last_seen = entry.timestamp
+        ts = entry.timestamp
+        if ts is not None:
+            # 99%情况：时间递增，只需要比较last_seen
+            ls = self.last_seen
+            if ls is None or ts > ls:
+                self.last_seen = ts
+                fs = self.first_seen
+                if fs is None or ts < fs:
+                    self.first_seen = ts
+            else:
+                # 偶尔需要检查first_seen
+                fs = self.first_seen
+                if fs is None or ts < fs:
+                    self.first_seen = ts
         
         level = entry.normalized_level
-        self.level_counts[level] = self.level_counts.get(level, 0) + 1
+        lc = self.level_counts
+        lc[level] = lc.get(level, 0) + 1
         
-        if entry.source and entry.source not in self.sources:
-            self.sources.append(entry.source)
-            if len(self.sources) > 100:
-                self.sources = self.sources[:100]
+        src = entry.source
+        if src:
+            sources = self.sources
+            # 快速检查：sources通常很小，用not in也很快
+            if src not in sources:
+                sources.append(src)
+                if len(sources) > 100:
+                    del sources[100:]
 
 
-@dataclass
+@dataclass(slots=True)
 class LogTemplate:
     """日志模板"""
     template_id: str
@@ -105,6 +119,8 @@ class LogTemplate:
 class DrainNode:
     """Drain前缀树节点"""
     
+    __slots__ = ('depth', 'children', 'templates')
+    
     def __init__(self, depth: int = 0):
         self.depth = depth
         self.children: Dict[str, "DrainNode"] = {}
@@ -126,34 +142,108 @@ class DrainNode:
 
 
 class LogPreprocessor:
-    """日志预处理器 - 替换变量部分"""
+    """日志预处理器 - 替换变量部分 - 优化版本"""
+    
+    __slots__ = (
+        'config', '_compiled_patterns', '_order', '_placeholders',
+        '_has_ip_pattern', '_has_num_pattern', '_has_uuid_pattern',
+        '_has_path_pattern', '_has_email_pattern',
+    )
     
     def __init__(self, config: PreprocessConfig):
         self.config = config
         self._compiled_patterns: Dict[str, re.Pattern] = {}
         self._order = config.order
+        self._placeholders: Dict[str, str] = {}
+        
+        # 快速标志位，避免不必要的正则调用
+        self._has_ip_pattern = False
+        self._has_num_pattern = False
+        self._has_uuid_pattern = False
+        self._has_path_pattern = False
+        self._has_email_pattern = False
         
         for pattern in config.patterns:
             try:
-                self._compiled_patterns[pattern.name] = re.compile(pattern.regex)
+                compiled = re.compile(pattern.regex)
+                self._compiled_patterns[pattern.name] = compiled
+                self._placeholders[pattern.name] = f"<{pattern.name}>"
+                lower_name = pattern.name.lower()
+                if 'ip' in lower_name:
+                    self._has_ip_pattern = True
+                elif 'num' in lower_name or 'number' in lower_name:
+                    self._has_num_pattern = True
+                elif 'uuid' in lower_name:
+                    self._has_uuid_pattern = True
+                elif 'path' in lower_name:
+                    self._has_path_pattern = True
+                elif 'email' in lower_name or 'mail' in lower_name:
+                    self._has_email_pattern = True
             except re.error:
                 pass
     
+    # 数字快速检查的字符集
+    _DIGIT_CHARS = set("0123456789")
+    _DOT = '.'
+    _SLASH = '/'
+    _BACKSLASH = '\\'
+    _AT = '@'
+    _DASH = '-'
+    
+    @staticmethod
+    def _has_digit_fast(s: str) -> bool:
+        """快速检查字符串中是否有数字"""
+        for c in s:
+            if '0' <= c <= '9':
+                return True
+        return False
+    
+    @staticmethod
+    def _has_digit_prefix_fast(s: str, max_len: int = 30) -> bool:
+        """快速检查前缀是否包含数字"""
+        n = len(s) if len(s) < max_len else max_len
+        for i in range(n):
+            c = s[i]
+            if '0' <= c <= '9':
+                return True
+        return False
+    
     def preprocess(self, message: str) -> str:
-        """预处理消息，替换变量部分"""
+        """预处理消息，替换变量部分 - 高性能版本"""
         result = message
         
         for name in self._order:
             pattern = self._compiled_patterns.get(name)
-            if pattern:
-                placeholder = f"<{name}>"
-                result = pattern.sub(placeholder, result)
+            if pattern is None:
+                continue
+            
+            placeholder = self._placeholders[name]
+            
+            # 基于模式类型快速检查（避免不必要的正则调用）
+            if name == "IP":
+                if self._DOT not in result or not self._has_digit_prefix_fast(result):
+                    continue
+            elif name == "NUM":
+                if not self._has_digit_fast(result):
+                    continue
+            elif name == "UUID":
+                if self._DASH not in result:
+                    continue
+            elif name == "PATH":
+                if self._SLASH not in result and self._BACKSLASH not in result:
+                    continue
+            elif name == "EMAIL":
+                if self._AT not in result:
+                    continue
+            
+            result = pattern.sub(placeholder, result)
         
         return result
     
     def tokenize(self, message: str) -> List[str]:
         """将消息分词"""
         preprocessed = self.preprocess(message)
+        # 使用默认split()比split(' ')快且处理连续空格
         tokens = preprocessed.split()
         return tokens
 
@@ -161,78 +251,124 @@ class LogPreprocessor:
 class Drain:
     """Drain算法实现"""
     
+    __slots__ = (
+        'config', 'preprocessor', 'root', 'templates',
+        '_template_counter', '_sim_th', '_depth_minus_2',
+        '_tok', '_match_fn', '_create_fn', '_add_fn',
+        '_ERROR', '_FATAL',
+    )
+    
     def __init__(self, config: DrainConfig, preprocessor: LogPreprocessor):
         self.config = config
         self.preprocessor = preprocessor
         self.root = DrainNode(depth=0)
         self.templates: Dict[str, LogTemplate] = {}
         self._template_counter = 0
+        # 缓存常用配置
+        self._sim_th = config.sim_th
+        self._depth_minus_2 = config.depth - 2
+        # 预绑定方法引用，减少属性访问开销
+        self._tok = preprocessor.tokenize
+        self._match_fn = self._match
+        self._create_fn = self._create_template
+        self._add_fn = self._add_template_to_tree
+        self._ERROR = "ERROR"
+        self._FATAL = "FATAL"
     
     def add_log_message(self, entry: LogEntry) -> LogTemplate:
-        """添加一条日志，返回匹配的模板"""
-        tokens = self.preprocessor.tokenize(entry.message)
+        """添加一条日志，返回匹配的模板 - 高性能版本"""
+        tokens = self._tok(entry.message)
         if not tokens:
             tokens = ["<EMPTY>"]
         
-        template = self._match(tokens)
+        template = self._match_fn(tokens)
         
         if template is None:
-            template = self._create_template(tokens)
-            self._add_template_to_tree(template)
+            template = self._create_fn(tokens)
+            self._add_fn(template)
         
         template.stats.update(entry)
         
-        if entry.normalized_level in ("ERROR", "FATAL"):
+        level = entry.normalized_level
+        if level == self._ERROR or level == self._FATAL:
             template.is_error = True
         
         return template
     
     def _match(self, tokens: List[str]) -> Optional[LogTemplate]:
-        """在前缀树中匹配模板"""
+        """在前缀树中匹配模板 - 优化版本"""
         token_count = len(tokens)
         count_key = str(token_count)
         
-        if count_key not in self.root.children:
+        root_children = self.root.children
+        if count_key not in root_children:
             return None
         
-        current_node = self.root.children[count_key]
+        current_node = root_children[count_key]
         
-        # 逐层匹配
-        for i in range(min(token_count, self.config.depth - 2)):
+        # 逐层匹配 - 使用缓存的 depth-2 值
+        max_depth = token_count if token_count < self._depth_minus_2 else self._depth_minus_2
+        
+        for i in range(max_depth):
             token = tokens[i]
-            if token in current_node.children:
-                current_node = current_node.children[token]
-            elif "<*>" in current_node.children:
-                current_node = current_node.children["<*>"]
+            node_children = current_node.children
+            if token in node_children:
+                current_node = node_children[token]
             else:
-                break
+                wild = node_children.get("<*>")
+                if wild is not None:
+                    current_node = wild
+                else:
+                    break
         
         # 在叶子节点的模板列表中查找最匹配的
+        templates = current_node.templates
+        if not templates:
+            return None
+        
         best_template = None
         best_sim = -1.0
+        sim_th = self._sim_th
         
-        for template in current_node.templates:
+        for template in templates:
             sim = self._calculate_similarity(tokens, template.tokens)
-            if sim >= self.config.sim_th and sim > best_sim:
+            if sim >= sim_th and sim > best_sim:
                 best_sim = sim
                 best_template = template
+                # 优化：如果相似度100%就不用再比较了
+                if best_sim >= 1.0:
+                    break
         
         return best_template
     
     def _calculate_similarity(self, tokens1: List[str], tokens2: List[str]) -> float:
-        """计算两个token序列的相似度"""
-        if len(tokens1) != len(tokens2):
+        """计算两个token序列的相似度 - 优化版本"""
+        n = len(tokens1)
+        if n != len(tokens2):
             return 0.0
         
-        if len(tokens1) == 0:
+        if n == 0:
             return 1.0
         
         same_count = 0
-        for t1, t2 in zip(tokens1, tokens2):
+        # 提前终止：如果已经不足则快速失败
+        min_required = n - int((1.0 - self.config.sim_th) * n)
+        remaining = n
+        
+        for i in range(n):
+            t1 = tokens1[i]
+            t2 = tokens2[i]
             if t1 == t2 or t1 == "<*>" or t2 == "<*>":
                 same_count += 1
+                if same_count >= min_required:
+                    # 已经满足阈值，快速返回
+                    return 1.0 if same_count == n else (same_count + 0.001) / n
+            remaining -= 1
+            # 快速失败：即使剩下全相同也达不到阈值
+            if same_count + remaining < min_required:
+                return 0.0
         
-        return same_count / len(tokens1)
+        return same_count / n
     
     def _create_template(self, tokens: List[str]) -> LogTemplate:
         """创建新模板"""

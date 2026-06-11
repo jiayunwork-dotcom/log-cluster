@@ -1,0 +1,961 @@
+{
+  "summary": {
+    "total_logs": 45,
+    "total_templates": 16,
+    "total_clusters": 16,
+    "duration_seconds": 0.003443002700805664,
+    "generated_at": "2026-06-11T13:31:55.796767"
+  },
+  "templates": [
+    {
+      "template_id": "T000002",
+      "template_str": "Connection from <IP> port <NUM>",
+      "tokens": [
+        "Connection",
+        "from",
+        "<IP>",
+        "port",
+        "<NUM>"
+      ],
+      "stats": {
+        "count": 13,
+        "first_seen": "2024-01-15T10:00:02",
+        "last_seen": "2024-01-15T12:00:02",
+        "level_counts": {
+          "INFO": 13
+        },
+        "sources": [
+          "server01",
+          "server02"
+        ]
+      },
+      "is_new": false,
+      "is_error": false,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0001"
+    },
+    {
+      "template_id": "T000005",
+      "template_str": "Request processed in 123ms for endpoint <PATH>",
+      "tokens": [
+        "Request",
+        "processed",
+        "in",
+        "123ms",
+        "for",
+        "endpoint",
+        "<PATH>"
+      ],
+      "stats": {
+        "count": 9,
+        "first_seen": "2024-01-15T10:00:07",
+        "last_seen": "2024-01-15T12:00:04",
+        "level_counts": {
+          "INFO": 9
+        },
+        "sources": [
+          "server01",
+          "server02"
+        ]
+      },
+      "is_new": false,
+      "is_error": false,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0002"
+    },
+    {
+      "template_id": "T000020",
+      "template_str": "User <*> logged in successfully",
+      "tokens": [
+        "User",
+        "<*>",
+        "logged",
+        "in",
+        "successfully"
+      ],
+      "stats": {
+        "count": 4,
+        "first_seen": "2024-01-15T10:00:04",
+        "last_seen": "2024-01-15T11:00:12",
+        "level_counts": {
+          "INFO": 4
+        },
+        "sources": [
+          "server01",
+          "server02"
+        ]
+      },
+      "is_new": false,
+      "is_error": false,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0003"
+    },
+    {
+      "template_id": "T000001",
+      "template_str": "Starting application version <NUM>.<NUM>.<NUM>",
+      "tokens": [
+        "Starting",
+        "application",
+        "version",
+        "<NUM>.<NUM>.<NUM>"
+      ],
+      "stats": {
+        "count": 3,
+        "first_seen": "2024-01-15T10:00:01",
+        "last_seen": "2024-01-15T12:00:01",
+        "level_counts": {
+          "INFO": 3
+        },
+        "sources": [
+          "server01"
+        ]
+      },
+      "is_new": false,
+      "is_error": false,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0004"
+    },
+    {
+      "template_id": "T000006",
+      "template_str": "Database connection failed for host db01.example.com",
+      "tokens": [
+        "Database",
+        "connection",
+        "failed",
+        "for",
+        "host",
+        "db01.example.com"
+      ],
+      "stats": {
+        "count": 2,
+        "first_seen": "2024-01-15T10:00:09",
+        "last_seen": "2024-01-15T11:00:09",
+        "level_counts": {
+          "ERROR": 2
+        },
+        "sources": [
+          "server01"
+        ]
+      },
+      "is_new": false,
+      "is_error": true,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0005"
+    },
+    {
+      "template_id": "T000007",
+      "template_str": "Retrying connection to db01.example.com",
+      "tokens": [
+        "Retrying",
+        "connection",
+        "to",
+        "db01.example.com"
+      ],
+      "stats": {
+        "count": 2,
+        "first_seen": "2024-01-15T10:00:10",
+        "last_seen": "2024-01-15T11:00:10",
+        "level_counts": {
+          "INFO": 2
+        },
+        "sources": [
+          "server01"
+        ]
+      },
+      "is_new": false,
+      "is_error": false,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0006"
+    },
+    {
+      "template_id": "T000010",
+      "template_str": "Disk space low on <PATH>: <NUM>% used",
+      "tokens": [
+        "Disk",
+        "space",
+        "low",
+        "on",
+        "<PATH>:",
+        "<NUM>%",
+        "used"
+      ],
+      "stats": {
+        "count": 2,
+        "first_seen": "2024-01-15T10:00:15",
+        "last_seen": "2024-01-15T11:00:15",
+        "level_counts": {
+          "WARN": 2
+        },
+        "sources": [
+          "server02"
+        ]
+      },
+      "is_new": false,
+      "is_error": false,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0007"
+    },
+    {
+      "template_id": "T000021",
+      "template_str": "High <*> usage detected: <NUM>%",
+      "tokens": [
+        "High",
+        "<*>",
+        "usage",
+        "detected:",
+        "<NUM>%"
+      ],
+      "stats": {
+        "count": 2,
+        "first_seen": "2024-01-15T10:00:06",
+        "last_seen": "2024-01-15T11:00:06",
+        "level_counts": {
+          "WARN": 2
+        },
+        "sources": [
+          "server01"
+        ]
+      },
+      "is_new": false,
+      "is_error": false,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0008"
+    },
+    {
+      "template_id": "T000009",
+      "template_str": "Cache miss for key user_profile_12345",
+      "tokens": [
+        "Cache",
+        "miss",
+        "for",
+        "key",
+        "user_profile_12345"
+      ],
+      "stats": {
+        "count": 1,
+        "first_seen": "2024-01-15T10:00:13",
+        "last_seen": "2024-01-15T10:00:13",
+        "level_counts": {
+          "DEBUG": 1
+        },
+        "sources": [
+          "server01"
+        ]
+      },
+      "is_new": false,
+      "is_error": false,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0009"
+    },
+    {
+      "template_id": "T000011",
+      "template_str": "Null pointer exception at com.example.Service.process",
+      "tokens": [
+        "Null",
+        "pointer",
+        "exception",
+        "at",
+        "com.example.Service.process"
+      ],
+      "stats": {
+        "count": 1,
+        "first_seen": "2024-01-15T10:00:17",
+        "last_seen": "2024-01-15T10:00:17",
+        "level_counts": {
+          "ERROR": 1
+        },
+        "sources": [
+          "server01"
+        ]
+      },
+      "is_new": false,
+      "is_error": true,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0010"
+    },
+    {
+      "template_id": "T000012",
+      "template_str": "Out of memory error, shutting down",
+      "tokens": [
+        "Out",
+        "of",
+        "memory",
+        "error,",
+        "shutting",
+        "down"
+      ],
+      "stats": {
+        "count": 1,
+        "first_seen": "2024-01-15T10:00:20",
+        "last_seen": "2024-01-15T10:00:20",
+        "level_counts": {
+          "FATAL": 1
+        },
+        "sources": [
+          "server01"
+        ]
+      },
+      "is_new": false,
+      "is_error": true,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0011"
+    },
+    {
+      "template_id": "T000015",
+      "template_str": "Cache hit for key user_profile_67890",
+      "tokens": [
+        "Cache",
+        "hit",
+        "for",
+        "key",
+        "user_profile_67890"
+      ],
+      "stats": {
+        "count": 1,
+        "first_seen": "2024-01-15T11:00:13",
+        "last_seen": "2024-01-15T11:00:13",
+        "level_counts": {
+          "DEBUG": 1
+        },
+        "sources": [
+          "server01"
+        ]
+      },
+      "is_new": false,
+      "is_error": false,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0012"
+    },
+    {
+      "template_id": "T000016",
+      "template_str": "Timeout waiting for response from service payment",
+      "tokens": [
+        "Timeout",
+        "waiting",
+        "for",
+        "response",
+        "from",
+        "service",
+        "payment"
+      ],
+      "stats": {
+        "count": 1,
+        "first_seen": "2024-01-15T11:00:17",
+        "last_seen": "2024-01-15T11:00:17",
+        "level_counts": {
+          "ERROR": 1
+        },
+        "sources": [
+          "server01"
+        ]
+      },
+      "is_new": false,
+      "is_error": true,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0013"
+    },
+    {
+      "template_id": "T000017",
+      "template_str": "Backup completed successfully to <PATH>",
+      "tokens": [
+        "Backup",
+        "completed",
+        "successfully",
+        "to",
+        "<PATH>"
+      ],
+      "stats": {
+        "count": 1,
+        "first_seen": "2024-01-15T11:00:20",
+        "last_seen": "2024-01-15T11:00:20",
+        "level_counts": {
+          "INFO": 1
+        },
+        "sources": [
+          "server01"
+        ]
+      },
+      "is_new": false,
+      "is_error": false,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0014"
+    },
+    {
+      "template_id": "T000018",
+      "template_str": "Failed to load config file <PATH>",
+      "tokens": [
+        "Failed",
+        "to",
+        "load",
+        "config",
+        "file",
+        "<PATH>"
+      ],
+      "stats": {
+        "count": 1,
+        "first_seen": "2024-01-15T12:00:03",
+        "last_seen": "2024-01-15T12:00:03",
+        "level_counts": {
+          "ERROR": 1
+        },
+        "sources": [
+          "server01"
+        ]
+      },
+      "is_new": false,
+      "is_error": true,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0015"
+    },
+    {
+      "template_id": "T000019",
+      "template_str": "Slow query detected: SELECT * FROM users WHERE id = <NUM>",
+      "tokens": [
+        "Slow",
+        "query",
+        "detected:",
+        "SELECT",
+        "*",
+        "FROM",
+        "users",
+        "WHERE",
+        "id",
+        "=",
+        "<NUM>"
+      ],
+      "stats": {
+        "count": 1,
+        "first_seen": "2024-01-15T12:00:05",
+        "last_seen": "2024-01-15T12:00:05",
+        "level_counts": {
+          "WARN": 1
+        },
+        "sources": [
+          "server01"
+        ]
+      },
+      "is_new": false,
+      "is_error": false,
+      "is_periodic": false,
+      "is_spike": false,
+      "is_vanished": false,
+      "is_rare": false,
+      "cluster_id": "C0016"
+    }
+  ],
+  "clusters": [
+    {
+      "cluster_id": "C0001",
+      "representative_id": "T000002",
+      "representative_str": "Connection from <IP> port <NUM>",
+      "total_count": 13,
+      "first_seen": "2024-01-15T10:00:02",
+      "last_seen": "2024-01-15T12:00:02",
+      "templates": [
+        "T000002"
+      ]
+    },
+    {
+      "cluster_id": "C0002",
+      "representative_id": "T000005",
+      "representative_str": "Request processed in 123ms for endpoint <PATH>",
+      "total_count": 9,
+      "first_seen": "2024-01-15T10:00:07",
+      "last_seen": "2024-01-15T12:00:04",
+      "templates": [
+        "T000005"
+      ]
+    },
+    {
+      "cluster_id": "C0003",
+      "representative_id": "T000020",
+      "representative_str": "User <*> logged in successfully",
+      "total_count": 4,
+      "first_seen": "2024-01-15T10:00:04",
+      "last_seen": "2024-01-15T11:00:12",
+      "templates": [
+        "T000020"
+      ]
+    },
+    {
+      "cluster_id": "C0004",
+      "representative_id": "T000001",
+      "representative_str": "Starting application version <NUM>.<NUM>.<NUM>",
+      "total_count": 3,
+      "first_seen": "2024-01-15T10:00:01",
+      "last_seen": "2024-01-15T12:00:01",
+      "templates": [
+        "T000001"
+      ]
+    },
+    {
+      "cluster_id": "C0005",
+      "representative_id": "T000006",
+      "representative_str": "Database connection failed for host db01.example.com",
+      "total_count": 2,
+      "first_seen": "2024-01-15T10:00:09",
+      "last_seen": "2024-01-15T11:00:09",
+      "templates": [
+        "T000006"
+      ]
+    },
+    {
+      "cluster_id": "C0006",
+      "representative_id": "T000007",
+      "representative_str": "Retrying connection to db01.example.com",
+      "total_count": 2,
+      "first_seen": "2024-01-15T10:00:10",
+      "last_seen": "2024-01-15T11:00:10",
+      "templates": [
+        "T000007"
+      ]
+    },
+    {
+      "cluster_id": "C0007",
+      "representative_id": "T000010",
+      "representative_str": "Disk space low on <PATH>: <NUM>% used",
+      "total_count": 2,
+      "first_seen": "2024-01-15T10:00:15",
+      "last_seen": "2024-01-15T11:00:15",
+      "templates": [
+        "T000010"
+      ]
+    },
+    {
+      "cluster_id": "C0008",
+      "representative_id": "T000021",
+      "representative_str": "High <*> usage detected: <NUM>%",
+      "total_count": 2,
+      "first_seen": "2024-01-15T10:00:06",
+      "last_seen": "2024-01-15T11:00:06",
+      "templates": [
+        "T000021"
+      ]
+    },
+    {
+      "cluster_id": "C0009",
+      "representative_id": "T000009",
+      "representative_str": "Cache miss for key user_profile_12345",
+      "total_count": 1,
+      "first_seen": "2024-01-15T10:00:13",
+      "last_seen": "2024-01-15T10:00:13",
+      "templates": [
+        "T000009"
+      ]
+    },
+    {
+      "cluster_id": "C0010",
+      "representative_id": "T000011",
+      "representative_str": "Null pointer exception at com.example.Service.process",
+      "total_count": 1,
+      "first_seen": "2024-01-15T10:00:17",
+      "last_seen": "2024-01-15T10:00:17",
+      "templates": [
+        "T000011"
+      ]
+    },
+    {
+      "cluster_id": "C0011",
+      "representative_id": "T000012",
+      "representative_str": "Out of memory error, shutting down",
+      "total_count": 1,
+      "first_seen": "2024-01-15T10:00:20",
+      "last_seen": "2024-01-15T10:00:20",
+      "templates": [
+        "T000012"
+      ]
+    },
+    {
+      "cluster_id": "C0012",
+      "representative_id": "T000015",
+      "representative_str": "Cache hit for key user_profile_67890",
+      "total_count": 1,
+      "first_seen": "2024-01-15T11:00:13",
+      "last_seen": "2024-01-15T11:00:13",
+      "templates": [
+        "T000015"
+      ]
+    },
+    {
+      "cluster_id": "C0013",
+      "representative_id": "T000016",
+      "representative_str": "Timeout waiting for response from service payment",
+      "total_count": 1,
+      "first_seen": "2024-01-15T11:00:17",
+      "last_seen": "2024-01-15T11:00:17",
+      "templates": [
+        "T000016"
+      ]
+    },
+    {
+      "cluster_id": "C0014",
+      "representative_id": "T000017",
+      "representative_str": "Backup completed successfully to <PATH>",
+      "total_count": 1,
+      "first_seen": "2024-01-15T11:00:20",
+      "last_seen": "2024-01-15T11:00:20",
+      "templates": [
+        "T000017"
+      ]
+    },
+    {
+      "cluster_id": "C0015",
+      "representative_id": "T000018",
+      "representative_str": "Failed to load config file <PATH>",
+      "total_count": 1,
+      "first_seen": "2024-01-15T12:00:03",
+      "last_seen": "2024-01-15T12:00:03",
+      "templates": [
+        "T000018"
+      ]
+    },
+    {
+      "cluster_id": "C0016",
+      "representative_id": "T000019",
+      "representative_str": "Slow query detected: SELECT * FROM users WHERE id = <NUM>",
+      "total_count": 1,
+      "first_seen": "2024-01-15T12:00:05",
+      "last_seen": "2024-01-15T12:00:05",
+      "templates": [
+        "T000019"
+      ]
+    }
+  ],
+  "anomalies": {
+    "has_anomaly": true,
+    "new_templates": [],
+    "error_templates": [
+      "T000006",
+      "T000011",
+      "T000012",
+      "T000016",
+      "T000018"
+    ],
+    "spike_templates": [],
+    "vanished_templates": [],
+    "periodic_templates": [],
+    "data_insufficient": true,
+    "data_insufficient_message": "数据不足：需要至少 24 个时间点，当前不足，跳过频率分析"
+  },
+  "time_series": {
+    "T000002": {
+      "template_id": "T000002",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T10:00:00",
+          "value": 6
+        },
+        {
+          "timestamp": "2024-01-15T11:00:00",
+          "value": 6
+        },
+        {
+          "timestamp": "2024-01-15T12:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000005": {
+      "template_id": "T000005",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T10:00:00",
+          "value": 4
+        },
+        {
+          "timestamp": "2024-01-15T11:00:00",
+          "value": 4
+        },
+        {
+          "timestamp": "2024-01-15T12:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000001": {
+      "template_id": "T000001",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T10:00:00",
+          "value": 1
+        },
+        {
+          "timestamp": "2024-01-15T11:00:00",
+          "value": 1
+        },
+        {
+          "timestamp": "2024-01-15T12:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000006": {
+      "template_id": "T000006",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T10:00:00",
+          "value": 1
+        },
+        {
+          "timestamp": "2024-01-15T11:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000007": {
+      "template_id": "T000007",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T10:00:00",
+          "value": 1
+        },
+        {
+          "timestamp": "2024-01-15T11:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000010": {
+      "template_id": "T000010",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T10:00:00",
+          "value": 1
+        },
+        {
+          "timestamp": "2024-01-15T11:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000009": {
+      "template_id": "T000009",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T10:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000011": {
+      "template_id": "T000011",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T10:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000012": {
+      "template_id": "T000012",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T10:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000015": {
+      "template_id": "T000015",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T11:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000016": {
+      "template_id": "T000016",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T11:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000017": {
+      "template_id": "T000017",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T11:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000018": {
+      "template_id": "T000018",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T12:00:00",
+          "value": 1
+        }
+      ]
+    },
+    "T000019": {
+      "template_id": "T000019",
+      "is_periodic": false,
+      "periodicity_hours": null,
+      "has_spike": false,
+      "spike_timestamps": [],
+      "has_vanished": false,
+      "vanished_since": null,
+      "mean": 0.0,
+      "std": 0.0,
+      "data_points": [
+        {
+          "timestamp": "2024-01-15T12:00:00",
+          "value": 1
+        }
+      ]
+    }
+  }
+}

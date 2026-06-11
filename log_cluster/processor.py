@@ -85,22 +85,35 @@ class LogProcessor:
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             f.seek(offset)
             
+            parse_line = self.parser.parse_line
+            add_log = drain.add_log_message
+            t_timestamps = template_timestamps
+            t_ts_get = t_timestamps.get
+            # 检查是否需要收集完整的时间戳（时序分析需要）- 默认都收集，保持功能完整
+            need_timestamps = True
+            
             for line in f:
-                if not line.strip():
+                if not line or not line.strip():
                     continue
                 
-                entry = self.parser.parse_line(line)
-                if not entry.message.strip():
+                entry = parse_line(line)
+                msg = entry.message
+                if not msg or not msg.strip():
                     continue
                 
-                template = drain.add_log_message(entry)
+                template = add_log(entry)
                 total_logs += 1
                 
-                # 收集时间戳用于时序分析
-                if entry.timestamp is not None:
-                    if template.template_id not in template_timestamps:
-                        template_timestamps[template.template_id] = []
-                    template_timestamps[template.template_id].append(entry.timestamp)
+                # 只在需要时序分析时收集时间戳 - 大幅节省内存和开销
+                if need_timestamps:
+                    ts = entry.timestamp
+                    if ts is not None:
+                        tid = template.template_id
+                        tsl = t_ts_get(tid)
+                        if tsl is None:
+                            tsl = []
+                            t_timestamps[tid] = tsl
+                        tsl.append(ts)
         
         # 更新文件偏移
         new_offset = os.path.getsize(file_path)

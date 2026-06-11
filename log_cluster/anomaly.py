@@ -38,12 +38,55 @@ class AnomalyDetector:
         self.anomaly_config = anomaly_config
         self.filters_config = filters_config
         self.timeseries_analyzer = timeseries_analyzer
-        self._baseline_templates: Set[str] = set()
+        self._baseline_template_strs: Set[str] = set()
+        self._baseline_template_ids: Set[str] = set()
         self._whitelist_patterns: List[re.Pattern] = []
         self._focus_patterns: List[re.Pattern] = []
         
         self._load_baseline()
         self._compile_filter_patterns()
+    
+    def _extract_templates_from_data(self, data: dict):
+        """从各种格式的数据中提取模板列表"""
+        templates_data = None
+        
+        # 状态文件格式: {drain_state: {templates: {...}}}
+        if "drain_state" in data:
+            drain_state = data["drain_state"]
+            templates_data = drain_state.get("templates", {})
+        # 报告格式: {templates: {...}}
+        elif "templates" in data:
+            templates_data = data.get("templates", {})
+        # 直接是模板字典
+        elif isinstance(data, dict) and any(isinstance(v, dict) and "template_str" in v for v in data.values()):
+            templates_data = data
+        
+        result_ids: Set[str] = set()
+        result_strs: Set[str] = set()
+        
+        if templates_data is None:
+            return result_ids, result_strs
+        
+        # 字典格式: {template_id: template_data}
+        if isinstance(templates_data, dict):
+            for tid, tdata in templates_data.items():
+                if isinstance(tdata, dict):
+                    result_ids.add(tid)
+                    tstr = tdata.get("template_str", "")
+                    if tstr:
+                        result_strs.add(tstr)
+        # 列表格式: [{template_id:..., template_str:...}]
+        elif isinstance(templates_data, list):
+            for t in templates_data:
+                if isinstance(t, dict):
+                    tid = t.get("template_id", "")
+                    tstr = t.get("template_str", "")
+                    if tid:
+                        result_ids.add(tid)
+                    if tstr:
+                        result_strs.add(tstr)
+        
+        return result_ids, result_strs
     
     def _load_baseline(self):
         """加载基线模板库"""
@@ -54,19 +97,26 @@ class AnomalyDetector:
             with open(self.anomaly_config.baseline_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             
-            templates = data.get("templates", {})
-            if isinstance(templates, dict):
-                self._baseline_templates = set(templates.keys())
-            elif isinstance(templates, list):
-                for t in templates:
-                    if isinstance(t, dict):
-                        tid = t.get("template_id", "")
-                        if tid:
-                            self._baseline_templates.add(tid)
-                    elif isinstance(t, str):
-                        self._baseline_templates.add(t)
-        except (FileNotFoundError, json.JSONDecodeError):
+            ids, strs = self._extract_templates_from_data(data)
+            self._baseline_template_ids = ids
+            self._baseline_template_strs = strs
+        except (FileNotFoundError, json.JSONDecodeError, IsADirectoryError):
             pass
+    
+    def _is_template_in_baseline(self, template: LogTemplate) -> bool:
+        """检查模板是否在基线中（优先按字符串匹配，其次按ID）"""
+        if not self._baseline_template_strs and not self._baseline_template_ids:
+            return False
+        
+        # 优先按模板字符串匹配（跨运行稳定）
+        if template.template_str in self._baseline_template_strs:
+            return True
+        
+        # 其次按ID匹配（同一运行内）
+        if template.template_id in self._baseline_template_ids:
+            return True
+        
+        return False
     
     def _compile_filter_patterns(self):
         """编译过滤正则表达式"""
@@ -120,13 +170,28 @@ class AnomalyDetector:
         """
         report = AnomalyReport()
         
+        has_baseline = bool(self._baseline_template_strs or self._baseline_template_ids)
+        
         # 检测新模板
         for template in templates:
             if self._is_whitelisted(template):
                 continue
             
-            # 检查是否是新模板
-            if template.template_id not in self._baseline_templates and template.is_new:
+            # 检查是否是新模板：有基线且不在基线中，或者没有基线但标记为is_new
+            in_baseline = self._is_template_in_baseline(template)
+            is_new_template = False
+            if has_baseline:
+                # 有基线时，以基线为准
+                is_new_template = not in_baseline
+            else:
+                # 无基线时，使用Drain的is_new标记
+                is_new_template = template.is_new
+            
+            # 清除已在基线中的模板的is_new标记
+            if has_baseline and in_baseline:
+                template.is_new = False
+            
+            if is_new_template:
                 report.new_templates.append(template)
                 report.has_anomaly = True
             
