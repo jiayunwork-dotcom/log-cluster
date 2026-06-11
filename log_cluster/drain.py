@@ -10,6 +10,41 @@ from .config import DrainConfig, PreprocessConfig
 from .parser import LogEntry
 
 
+EVENT_TYPE_CREATED = "created"
+EVENT_TYPE_MERGED = "merged"
+EVENT_TYPE_COMPRESSED = "compressed"
+EVENT_TYPE_ACTIVE = "active"
+
+
+@dataclass(slots=True)
+class TemplateEvent:
+    """模板生命周期事件"""
+    timestamp: datetime
+    event_type: str
+    template_id: str
+    related_template_id: str = ""
+    details: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "timestamp": self.timestamp.isoformat(),
+            "event_type": self.event_type,
+            "template_id": self.template_id,
+            "related_template_id": self.related_template_id,
+            "details": self.details,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TemplateEvent":
+        return cls(
+            timestamp=datetime.fromisoformat(data["timestamp"]),
+            event_type=data["event_type"],
+            template_id=data["template_id"],
+            related_template_id=data.get("related_template_id", ""),
+            details=data.get("details", ""),
+        )
+
+
 @dataclass(slots=True)
 class TemplateStats:
     """模板统计信息"""
@@ -65,10 +100,22 @@ class LogTemplate:
     is_vanished: bool = False
     is_rare: bool = False
     cluster_id: str = ""
+    tags: List[str] = field(default_factory=list)
+    created_at: Optional[datetime] = None
+    merged_at: Optional[datetime] = None
+    compressed_at: Optional[datetime] = None
     
     def __post_init__(self):
         if not self.template_str:
             self.template_str = " ".join(self.tokens)
+    
+    def active_duration_seconds(self, now: Optional[datetime] = None) -> float:
+        """获取模板活跃时长（秒）"""
+        end_time = self.merged_at or self.compressed_at or now or datetime.now()
+        start_time = self.created_at or self.stats.first_seen
+        if start_time is None:
+            return 0.0
+        return max(0.0, (end_time - start_time).total_seconds())
     
     def to_dict(self) -> dict:
         return {
@@ -89,6 +136,10 @@ class LogTemplate:
             "is_vanished": self.is_vanished,
             "is_rare": self.is_rare,
             "cluster_id": self.cluster_id,
+            "tags": self.tags,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "merged_at": self.merged_at.isoformat() if self.merged_at else None,
+            "compressed_at": self.compressed_at.isoformat() if self.compressed_at else None,
         }
     
     @classmethod
@@ -113,6 +164,10 @@ class LogTemplate:
             is_vanished=data.get("is_vanished", False),
             is_rare=data.get("is_rare", False),
             cluster_id=data.get("cluster_id", ""),
+            tags=data.get("tags", []),
+            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
+            merged_at=datetime.fromisoformat(data["merged_at"]) if data.get("merged_at") else None,
+            compressed_at=datetime.fromisoformat(data["compressed_at"]) if data.get("compressed_at") else None,
         )
 
 
@@ -256,6 +311,7 @@ class Drain:
         '_template_counter', '_sim_th', '_depth_minus_2',
         '_tok', '_match_fn', '_create_fn', '_add_fn',
         '_ERROR', '_FATAL',
+        'events',
     )
     
     def __init__(self, config: DrainConfig, preprocessor: LogPreprocessor):
@@ -274,6 +330,8 @@ class Drain:
         self._add_fn = self._add_template_to_tree
         self._ERROR = "ERROR"
         self._FATAL = "FATAL"
+        # 生命周期事件列表
+        self.events: List[TemplateEvent] = []
     
     def add_log_message(self, entry: LogEntry) -> LogTemplate:
         """添加一条日志，返回匹配的模板 - 高性能版本"""
@@ -370,20 +428,32 @@ class Drain:
         
         return same_count / n
     
+    def _record_event(self, event: TemplateEvent):
+        """记录生命周期事件"""
+        self.events.append(event)
+    
     def _create_template(self, tokens: List[str]) -> LogTemplate:
         """创建新模板"""
         self._template_counter += 1
         template_id = f"T{self._template_counter:06d}"
         template_str = " ".join(tokens)
+        now = datetime.now()
         
         template = LogTemplate(
             template_id=template_id,
             template_str=template_str,
             tokens=tokens.copy(),
             is_new=True,
+            created_at=now,
         )
         
         self.templates[template_id] = template
+        self._record_event(TemplateEvent(
+            timestamp=now,
+            event_type=EVENT_TYPE_CREATED,
+            template_id=template_id,
+            details=f"创建模板: {template_str[:80]}",
+        ))
         return template
     
     def _add_template_to_tree(self, template: LogTemplate):
@@ -444,6 +514,7 @@ class Drain:
                         pos = diff_positions[0]
                         tok1 = t1.tokens[pos]
                         tok2 = t2.tokens[pos]
+                        now = datetime.now()
                         
                         # 如果其中一个是通配符，或者两个都不是通配符则合并为通配符
                         if tok1 == "<*>" or tok2 == "<*>":
@@ -451,11 +522,27 @@ class Drain:
                             if tok1 == "<*>":
                                 self._merge_template_stats(t1, t2)
                                 self._remove_template_from_tree(t2)
+                                t2.merged_at = now
                                 del self.templates[t2.template_id]
+                                self._record_event(TemplateEvent(
+                                    timestamp=now,
+                                    event_type=EVENT_TYPE_MERGED,
+                                    template_id=t2.template_id,
+                                    related_template_id=t1.template_id,
+                                    details=f"合并到通配符模板 {t1.template_id}",
+                                ))
                             else:
                                 self._merge_template_stats(t2, t1)
                                 self._remove_template_from_tree(t1)
+                                t1.merged_at = now
                                 del self.templates[t1.template_id]
+                                self._record_event(TemplateEvent(
+                                    timestamp=now,
+                                    event_type=EVENT_TYPE_MERGED,
+                                    template_id=t1.template_id,
+                                    related_template_id=t2.template_id,
+                                    details=f"合并到通配符模板 {t2.template_id}",
+                                ))
                             changed = True
                             break
                         else:
@@ -475,8 +562,24 @@ class Drain:
                                 self._merge_template_stats(existing, t2)
                                 self._remove_template_from_tree(t1)
                                 self._remove_template_from_tree(t2)
+                                t1.merged_at = now
+                                t2.merged_at = now
                                 del self.templates[t1.template_id]
                                 del self.templates[t2.template_id]
+                                self._record_event(TemplateEvent(
+                                    timestamp=now,
+                                    event_type=EVENT_TYPE_MERGED,
+                                    template_id=t1.template_id,
+                                    related_template_id=existing.template_id,
+                                    details=f"合并到现有通配符模板",
+                                ))
+                                self._record_event(TemplateEvent(
+                                    timestamp=now,
+                                    event_type=EVENT_TYPE_MERGED,
+                                    template_id=t2.template_id,
+                                    related_template_id=existing.template_id,
+                                    details=f"合并到现有通配符模板",
+                                ))
                             else:
                                 # 创建新的通配符模板
                                 new_template = self._create_template(new_tokens)
@@ -484,9 +587,25 @@ class Drain:
                                 self._merge_template_stats(new_template, t2)
                                 self._remove_template_from_tree(t1)
                                 self._remove_template_from_tree(t2)
+                                t1.merged_at = now
+                                t2.merged_at = now
                                 del self.templates[t1.template_id]
                                 del self.templates[t2.template_id]
                                 self._add_template_to_tree(new_template)
+                                self._record_event(TemplateEvent(
+                                    timestamp=now,
+                                    event_type=EVENT_TYPE_MERGED,
+                                    template_id=t1.template_id,
+                                    related_template_id=new_template.template_id,
+                                    details=f"合并创建新通配符模板",
+                                ))
+                                self._record_event(TemplateEvent(
+                                    timestamp=now,
+                                    event_type=EVENT_TYPE_MERGED,
+                                    template_id=t2.template_id,
+                                    related_template_id=new_template.template_id,
+                                    details=f"合并创建新通配符模板",
+                                ))
                             
                             changed = True
                             break
@@ -557,6 +676,7 @@ class Drain:
             "template_counter": self._template_counter,
             "templates": {k: v.to_dict() for k, v in self.templates.items()},
             "root": self.root.to_dict(),
+            "events": [e.to_dict() for e in self.events],
         }
     
     @classmethod
@@ -573,6 +693,7 @@ class Drain:
         drain._template_counter = data.get("template_counter", 0)
         drain.templates = {k: LogTemplate.from_dict(v) for k, v in data.get("templates", {}).items()}
         drain.root = DrainNode.from_dict(data.get("root", {}))
+        drain.events = [TemplateEvent.from_dict(e) for e in data.get("events", [])]
         
         return drain
     
@@ -586,10 +707,18 @@ class Drain:
             被标记为稀有的模板数量
         """
         rare_count_num = 0
+        now = datetime.now()
         
         for template in self.templates.values():
             if template.stats.count < rare_count and not template.is_rare:
                 template.is_rare = True
+                template.compressed_at = now
                 rare_count_num += 1
+                self._record_event(TemplateEvent(
+                    timestamp=now,
+                    event_type=EVENT_TYPE_COMPRESSED,
+                    template_id=template.template_id,
+                    details=f"标记为稀有模板，count={template.stats.count}",
+                ))
         
         return rare_count_num

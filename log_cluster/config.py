@@ -60,6 +60,47 @@ DEFAULT_CONFIG = {
         "max_templates": 10000,
         "rare_template_count": 5,
     },
+    "parallel": {
+        "workers": 0,
+    },
+    "alerts": [
+        {
+            "name": "high_error_templates",
+            "condition": "error_template_count > 5",
+            "severity": "critical",
+            "message": "检测到 {error_template_count} 个ERROR模板，超过阈值5",
+        },
+        {
+            "name": "spike_surge",
+            "condition": "spike_count > 10",
+            "severity": "warning",
+            "message": "频率激增模板 {spike_count} 个，超过阈值10",
+        },
+        {
+            "name": "slow_processing",
+            "condition": "processing_speed < 50000",
+            "severity": "info",
+            "message": "处理速度 {processing_speed:.0f} 行/秒，低于5万行/秒",
+        },
+    ],
+    "tags": [
+        {
+            "pattern": r"(?i)(error|exception|fail|fatal)",
+            "tags": ["error/general"],
+        },
+        {
+            "pattern": r"(?i)(timeout|timed.?out)",
+            "tags": ["infra/network/timeout"],
+        },
+        {
+            "pattern": r"(?i)(database|mysql|postgres|sql|connection.*refused)",
+            "tags": ["infra/database/connection"],
+        },
+        {
+            "pattern": r"(?i)(out.?of.?memory|oom|heap)",
+            "tags": ["infra/resource/memory"],
+        },
+    ],
 }
 
 
@@ -130,6 +171,25 @@ class IncrementalConfig:
 
 
 @dataclass
+class ParallelConfig:
+    workers: int = 0
+
+
+@dataclass
+class AlertRule:
+    name: str
+    condition: str
+    severity: str = "info"
+    message: str = ""
+
+
+@dataclass
+class TagRule:
+    pattern: str
+    tags: List[str] = field(default_factory=list)
+
+
+@dataclass
 class AppConfig:
     drain: DrainConfig = field(default_factory=DrainConfig)
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
@@ -139,6 +199,9 @@ class AppConfig:
     filters: FiltersConfig = field(default_factory=FiltersConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     incremental: IncrementalConfig = field(default_factory=IncrementalConfig)
+    parallel: ParallelConfig = field(default_factory=ParallelConfig)
+    alerts: List[AlertRule] = field(default_factory=list)
+    tags: List[TagRule] = field(default_factory=list)
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -185,10 +248,29 @@ def _dict_to_config(data: Dict[str, Any]) -> AppConfig:
     filters_data = data.get("filters", {})
     output_data = data.get("output", {})
     incremental_data = data.get("incremental", {})
+    parallel_data = data.get("parallel", {})
+    alerts_data = data.get("alerts", [])
+    tags_data = data.get("tags", [])
     
     patterns = []
     for p in preprocess_data.get("patterns", []):
         patterns.append(PreprocessPattern(name=p["name"], regex=p["regex"]))
+    
+    alert_rules = []
+    for a in alerts_data:
+        alert_rules.append(AlertRule(
+            name=a["name"],
+            condition=a["condition"],
+            severity=a.get("severity", "info"),
+            message=a.get("message", ""),
+        ))
+    
+    tag_rules = []
+    for t in tags_data:
+        tag_rules.append(TagRule(
+            pattern=t["pattern"],
+            tags=t.get("tags", []),
+        ))
     
     return AppConfig(
         drain=DrainConfig(
@@ -235,6 +317,11 @@ def _dict_to_config(data: Dict[str, Any]) -> AppConfig:
             max_templates=incremental_data.get("max_templates", 10000),
             rare_template_count=incremental_data.get("rare_template_count", 5),
         ),
+        parallel=ParallelConfig(
+            workers=parallel_data.get("workers", 0),
+        ),
+        alerts=alert_rules,
+        tags=tag_rules,
     )
 
 
@@ -311,4 +398,23 @@ def _config_to_dict(config: AppConfig) -> Dict[str, Any]:
             "max_templates": config.incremental.max_templates,
             "rare_template_count": config.incremental.rare_template_count,
         },
+        "parallel": {
+            "workers": config.parallel.workers,
+        },
+        "alerts": [
+            {
+                "name": a.name,
+                "condition": a.condition,
+                "severity": a.severity,
+                "message": a.message,
+            }
+            for a in config.alerts
+        ],
+        "tags": [
+            {
+                "pattern": t.pattern,
+                "tags": t.tags,
+            }
+            for t in config.tags
+        ],
     }

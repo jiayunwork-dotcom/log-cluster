@@ -47,11 +47,20 @@ def _process_and_report(
             total_clusters=len(result.clusters),
             duration=result.duration,
         )
+        # 告警（醒目显示）
+        if result.triggered_alerts:
+            reporter.print_triggered_alerts(result.triggered_alerts)
         reporter.print_top_templates(result.templates)
         reporter.print_clusters(result.clusters)
+        # 模板演化区域
+        if result.events:
+            reporter.print_template_evolution(
+                events=result.events,
+                templates=result.templates,
+            )
         if result.anomaly_report:
             reporter.print_anomalies(result.anomaly_report)
-    
+
     # JSON输出
     json_path = None
     if output_format == "json" or output_format == "all":
@@ -63,13 +72,15 @@ def _process_and_report(
             total_logs=result.total_logs,
             duration=result.duration,
             time_series_analyses=result.anomaly_report.time_series_analyses if result.anomaly_report else None,
+            events=result.events,
+            triggered_alerts=result.triggered_alerts,
         )
-        
+
         os.makedirs(output_dir, exist_ok=True)
         json_path = os.path.join(output_dir, "report.json")
         json_reporter.save_report(report, json_path)
         print(f"JSON报告已保存: {json_path}")
-    
+
     # HTML输出
     if output_format == "html" or output_format == "all":
         html_reporter = HtmlReporter(config.output)
@@ -80,13 +91,15 @@ def _process_and_report(
             total_logs=result.total_logs,
             duration=result.duration,
             time_series_analyses=result.anomaly_report.time_series_analyses if result.anomaly_report else None,
+            triggered_alerts=result.triggered_alerts,
+            events=result.events,
         )
-        
+
         os.makedirs(output_dir, exist_ok=True)
         html_path = os.path.join(output_dir, "report.html")
         html_reporter.save_report(html, html_path)
         print(f"HTML报告已保存: {html_path}")
-    
+
     return json_path
 
 
@@ -118,9 +131,17 @@ def analyze(
     top_n: Optional[int] = typer.Option(
         None, "--top", help="显示Top N个模板"
     ),
+    workers: Optional[int] = typer.Option(
+        None, "--workers", "-w",
+        help="并行进程数，0=禁用并行单进程，负数=CPU核心数一半，默认使用配置"
+    ),
+    tag: Optional[str] = typer.Option(
+        None, "--tag", "-t",
+        help="按标签过滤输出（支持层级匹配，如infra/database）"
+    ),
 ):
     """分析日志文件，提取模板并检测异常"""
-    
+
     overrides = {}
     if depth is not None:
         overrides["drain.depth"] = depth
@@ -133,16 +154,20 @@ def analyze(
         overrides["anomaly.baseline_file"] = baseline
     if output_dir:
         overrides["output.output_dir"] = output_dir
-    
+    if workers is not None:
+        overrides["parallel.workers"] = workers
+
     config = _get_config(config_path, overrides)
     processor = LogProcessor(config)
-    
+
     result = processor.process_files(
         file_paths=files,
         incremental=incremental,
         load_state=incremental,
+        workers=workers,
+        tag_filter=tag,
     )
-    
+
     _process_and_report(
         processor=processor,
         result=result,
@@ -176,12 +201,16 @@ def stream(
     state_file: Optional[str] = typer.Option(
         None, "--state", help="状态文件路径（用于流式增量）"
     ),
+    tag: Optional[str] = typer.Option(
+        None, "--tag", "-t",
+        help="按标签过滤输出（支持层级匹配）"
+    ),
 ):
     """从标准输入读取日志流进行分析
-    
+
     用法: tail -f access.log | log-cluster stream
     """
-    
+
     overrides = {}
     if depth is not None:
         overrides["drain.depth"] = depth
@@ -194,17 +223,16 @@ def stream(
         overrides["output.output_dir"] = output_dir
     if state_file:
         overrides["incremental.state_file"] = state_file
-    
+
     config = _get_config(config_path, overrides)
     processor = LogProcessor(config)
-    
-    # 从stdin读取
+
     def line_generator():
         for line in sys.stdin:
             yield line
-    
-    result = processor.process_stream(line_generator())
-    
+
+    result = processor.process_stream(line_generator(), tag_filter=tag)
+
     _process_and_report(
         processor=processor,
         result=result,
@@ -362,6 +390,41 @@ incremental:
   state_file: ./log-cluster-state.json  # 状态文件路径
   max_templates: 10000  # 最大模板数（超过则压缩）
   rare_template_count: 5  # 稀有模板阈值（小于此数标记为稀有）
+
+# 并行处理配置
+parallel:
+  workers: 0            # 并行进程数：0=禁用并行(单进程)，正数=指定进程数，负数=CPU核心数一半
+
+# 告警规则引擎
+# 支持的变量：new_template_count, error_template_count, spike_count,
+#            total_templates, processing_speed(行/秒)
+# severity: critical/warning/info
+alerts:
+  - name: high_error_templates
+    condition: "error_template_count > 5"
+    severity: critical
+    message: "检测到 {error_template_count} 个ERROR模板，超过阈值5"
+  - name: spike_surge
+    condition: "spike_count > 10"
+    severity: warning
+    message: "频率激增模板 {spike_count} 个，超过阈值10"
+  - name: slow_processing
+    condition: "processing_speed < 50000"
+    severity: info
+    message: "处理速度 {processing_speed:.0f} 行/秒，低于5万行/秒"
+
+# 模板标签系统
+# pattern: 正则表达式匹配模板字符串
+# tags: 标签列表（支持层级如infra/database/timeout，上级标签包含下级）
+tags:
+  - pattern: "(?i)(error|exception|fail|fatal)"
+    tags: ["error/general"]
+  - pattern: "(?i)(timeout|timed.?out)"
+    tags: ["infra/network/timeout"]
+  - pattern: "(?i)(database|mysql|postgres|sql|connection.*refused)"
+    tags: ["infra/database/connection"]
+  - pattern: "(?i)(out.?of.?memory|oom|heap)"
+    tags: ["infra/resource/memory"]
 """
     
     config_file.parent.mkdir(parents=True, exist_ok=True)

@@ -9,13 +9,21 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from .alerts import TriggeredAlert
 from .anomaly import AnomalyReport
 from .clustering import TemplateCluster
 from .config import OutputConfig
-from .drain import LogTemplate
+from .drain import (
+    EVENT_TYPE_COMPRESSED,
+    EVENT_TYPE_CREATED,
+    EVENT_TYPE_MERGED,
+    LogTemplate,
+    TemplateEvent,
+)
 from .timeseries import TimeSeriesAnalysis
 
 
@@ -50,7 +58,164 @@ class TerminalReporter:
         
         self.console.print(table)
         self.console.print()
-    
+
+    def print_triggered_alerts(self, alerts: List[TriggeredAlert]):
+        """醒目显示触发的告警"""
+        self.console.rule("[bold magenta]告警通知[/bold magenta]")
+        self.console.print()
+
+        severity_styles = {
+            "critical": "bold red",
+            "warning": "bold yellow",
+            "info": "bold blue",
+        }
+        severity_labels = {
+            "critical": "🚨 CRITICAL",
+            "warning": "⚠️  WARNING",
+            "info": "ℹ️  INFO",
+        }
+
+        for alert in alerts:
+            style = severity_styles.get(alert.severity.lower(), "")
+            label = severity_labels.get(alert.severity.lower(), alert.severity.upper())
+            title = f"[{style}]{label}  {alert.name}[/{style}]"
+
+            content = Text.assemble(
+                (f"{alert.message}\n", style),
+                ("\n", ""),
+                ("条件: ", "dim"),
+                (f"{alert.condition}\n", "white"),
+                ("时间: ", "dim"),
+                (f"{alert.triggered_at.strftime('%Y-%m-%d %H:%M:%S')}", "white"),
+            )
+            panel = Panel(
+                content,
+                title=title,
+                border_style=style,
+                expand=True,
+            )
+            self.console.print(panel)
+            self.console.print()
+
+    def print_template_evolution(
+        self,
+        events: List[TemplateEvent],
+        templates: List[LogTemplate],
+    ):
+        """打印模板演化区域：最近创建/最近消亡/活跃最久"""
+        self.console.rule("[bold purple]模板演化追踪[/bold purple]")
+        self.console.print()
+
+        # 按事件类型分类
+        created_events = [
+            e for e in events if e.event_type == EVENT_TYPE_CREATED
+        ]
+        merged_events = [
+            e for e in events if e.event_type == EVENT_TYPE_MERGED
+        ]
+        compressed_events = [
+            e for e in events if e.event_type == EVENT_TYPE_COMPRESSED
+        ]
+        dead_events = merged_events + compressed_events
+
+        # 1. 最近创建的5个
+        recent_created = sorted(
+            created_events, key=lambda e: e.timestamp, reverse=True
+        )[:5]
+        if recent_created:
+            self.console.print("[bold green]🆕 最近创建的5个模板:[/bold green]")
+            table = Table(show_header=True, header_style="bold green", show_lines=False)
+            table.add_column("时间", width=20)
+            table.add_column("模板ID", width=12)
+            table.add_column("详情", overflow="fold")
+            for e in recent_created:
+                table.add_row(
+                    e.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    e.template_id,
+                    e.details[:80],
+                )
+            self.console.print(table)
+            self.console.print()
+
+        # 2. 最近消亡（被合并或压缩）的5个
+        recent_dead = sorted(
+            dead_events, key=lambda e: e.timestamp, reverse=True
+        )[:5]
+        if recent_dead:
+            self.console.print("[bold red]💀 最近消亡的5个模板（合并/压缩）:[/bold red]")
+            table = Table(show_header=True, header_style="bold red", show_lines=False)
+            table.add_column("时间", width=20)
+            table.add_column("类型", width=10)
+            table.add_column("模板ID", width=12)
+            table.add_column("关联ID", width=12)
+            table.add_column("详情", overflow="fold")
+            type_labels = {
+                EVENT_TYPE_MERGED: "合并",
+                EVENT_TYPE_COMPRESSED: "压缩",
+            }
+            for e in recent_dead:
+                table.add_row(
+                    e.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    type_labels.get(e.event_type, e.event_type),
+                    e.template_id,
+                    e.related_template_id or "-",
+                    e.details[:80],
+                )
+            self.console.print(table)
+            self.console.print()
+
+        # 3. 活跃时间最长的5个（基于当前存在的模板）
+        alive_templates = [t for t in templates if t.merged_at is None and t.compressed_at is None]
+        now = datetime.now()
+        alive_with_duration = [
+            (t, t.active_duration_seconds(now)) for t in alive_templates
+        ]
+        alive_with_duration.sort(key=lambda x: x[1], reverse=True)
+        longest_alive = alive_with_duration[:5]
+
+        if longest_alive:
+            self.console.print("[bold blue]⭐ 活跃时间最长的5个模板:[/bold blue]")
+            table = Table(show_header=True, header_style="bold blue", show_lines=False)
+            table.add_column("模板ID", width=12)
+            table.add_column("活跃时长", width=16)
+            table.add_column("首次出现", width=20)
+            table.add_column("最后活跃", width=20)
+            table.add_column("频率", justify="right")
+            table.add_column("模板内容", overflow="fold")
+
+            def _fmt_duration(seconds: float) -> str:
+                if seconds < 60:
+                    return f"{seconds:.0f}秒"
+                elif seconds < 3600:
+                    return f"{seconds / 60:.1f}分钟"
+                elif seconds < 86400:
+                    return f"{seconds / 3600:.1f}小时"
+                else:
+                    return f"{seconds / 86400:.1f}天"
+
+            for t, dur in longest_alive:
+                first = (
+                    t.stats.first_seen.strftime("%Y-%m-%d %H:%M:%S")
+                    if t.stats.first_seen
+                    else "未知"
+                )
+                last = (
+                    t.stats.last_seen.strftime("%Y-%m-%d %H:%M:%S")
+                    if t.stats.last_seen
+                    else "未知"
+                )
+                tpl_str = t.template_str[:60] + ("..." if len(t.template_str) > 60 else "")
+                table.add_row(
+                    t.template_id,
+                    _fmt_duration(dur),
+                    first,
+                    last,
+                    f"{t.stats.count:,}",
+                    tpl_str,
+                )
+            self.console.print(table)
+            self.console.print()
+
     def print_top_templates(self, templates: List[LogTemplate]):
         """打印Top N模板"""
         top_n = self.config.top_n
@@ -64,13 +229,14 @@ class TerminalReporter:
         table.add_column("模板ID", width=10)
         table.add_column("频率", justify="right", width=10)
         table.add_column("级别", width=8)
+        table.add_column("标签", width=24, overflow="fold")
         table.add_column("模板内容", overflow="fold")
         table.add_column("状态", width=12)
-        
+
         for i, template in enumerate(show_templates, 1):
             status_parts = []
             status_style = ""
-            
+
             if template.is_new:
                 status_parts.append("新模板")
                 status_style = "red bold"
@@ -88,24 +254,30 @@ class TerminalReporter:
                 status_parts.append("周期")
             if template.is_rare:
                 status_parts.append("稀有")
-            
+
             status_text = ", ".join(status_parts) if status_parts else "正常"
-            
+
             # 获取主要级别
             level = self._get_main_level(template)
             level_style = self._get_level_style(level)
-            
+
+            # 标签显示
+            tag_text = " ".join(f"[{t}]" for t in (template.tags or [])[:3])
+            if len(template.tags or []) > 3:
+                tag_text += f" +{len(template.tags) - 3}"
+
             # 模板内容截断
             template_str = template.template_str
-            if len(template_str) > 100:
-                template_str = template_str[:97] + "..."
-            
+            if len(template_str) > 80:
+                template_str = template_str[:77] + "..."
+
             if status_style:
                 table.add_row(
                     str(i),
                     template.template_id,
                     f"{template.stats.count:,}",
                     Text(level, style=level_style),
+                    Text(tag_text, style="cyan"),
                     template_str,
                     Text(status_text, style=status_style),
                 )
@@ -115,10 +287,11 @@ class TerminalReporter:
                     template.template_id,
                     f"{template.stats.count:,}",
                     Text(level, style=level_style),
+                    Text(tag_text, style="cyan"),
                     template_str,
                     status_text,
                 )
-        
+
         self.console.print(table)
         self.console.print()
     
@@ -241,15 +414,18 @@ class JsonReporter:
         total_logs: int,
         duration: float,
         time_series_analyses: Optional[Dict[str, TimeSeriesAnalysis]] = None,
+        events: Optional[List[TemplateEvent]] = None,
+        triggered_alerts: Optional[List[TriggeredAlert]] = None,
     ) -> dict:
         """生成JSON格式报告"""
-        return {
+        report = {
             "summary": {
                 "total_logs": total_logs,
                 "total_templates": len(templates),
                 "total_clusters": len(clusters),
                 "duration_seconds": duration,
                 "generated_at": datetime.now().isoformat(),
+                "processing_speed": total_logs / max(duration, 0.001),
             },
             "templates": [t.to_dict() for t in templates],
             "clusters": [c.to_dict() for c in clusters],
@@ -268,6 +444,11 @@ class JsonReporter:
                 for tid, tsa in (time_series_analyses or {}).items()
             },
         }
+        if events:
+            report["events"] = [e.to_dict() for e in events]
+        if triggered_alerts:
+            report["triggered_alerts"] = [a.to_dict() for a in triggered_alerts]
+        return report
     
     def save_report(self, report: dict, output_path: str) -> str:
         """保存报告到文件"""
@@ -311,18 +492,21 @@ class HtmlReporter:
         total_logs: int,
         duration: float,
         time_series_analyses: Optional[Dict[str, TimeSeriesAnalysis]] = None,
+        triggered_alerts: Optional[List[TriggeredAlert]] = None,
+        events: Optional[List[TemplateEvent]] = None,
     ) -> str:
         """生成HTML报告"""
         top_templates = templates[:self.config.html_max_templates]
-        
+
         charts_html = ""
         if time_series_analyses:
             charts_html = self._generate_charts(top_templates, time_series_analyses)
-        
+
         templates_html = self._generate_templates_table(templates)
         clusters_html = self._generate_clusters_table(clusters)
         anomalies_html = self._generate_anomalies_section(anomaly_report)
-        
+        alerts_html = self._generate_alerts_section(triggered_alerts or [])
+
         html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -407,6 +591,9 @@ svg {{ width: 100%; height: 150px; }}
         <div class="summary-label">行/秒</div>
     </div>
 </div>
+
+<h2>🚨 告警通知</h2>
+{alerts_html}
 
 <h2>⚠️ 异常检测</h2>
 {anomalies_html}
@@ -607,25 +794,39 @@ function toggleCollapse(id) {{
                 badges.append('<span class="badge badge-vanished">消失</span>')
             if t.is_periodic:
                 badges.append('<span class="badge badge-periodic">周期</span>')
-            
+
+            # 标签徽章
+            tag_badges = ""
+            if t.tags:
+                tag_html = " ".join(
+                    f'<span class="badge" style="background:#8e44ad;color:white;">{self._escape_html(tag)}</span>'
+                    for tag in t.tags[:5]
+                )
+                if len(t.tags) > 5:
+                    tag_html += f" <span style='color:#999;'>+{len(t.tags) - 5}</span>"
+                tag_badges = f"<div style='margin-top:4px;'>{tag_html}</div>"
+
             first_seen = t.stats.first_seen.strftime("%Y-%m-%d %H:%M:%S") if t.stats.first_seen else "未知"
             last_seen = t.stats.last_seen.strftime("%Y-%m-%d %H:%M:%S") if t.stats.last_seen else "未知"
-            
+
             level = max(t.stats.level_counts.items(), key=lambda x: x[1])[0] if t.stats.level_counts else "INFO"
-            
+
             rows.append(f"""
             <tr>
                 <td>{i}</td>
                 <td>{t.template_id}</td>
                 <td style="text-align:right">{t.stats.count:,}</td>
                 <td>{level}</td>
-                <td><span class="template-str">{self._escape_html(t.template_str)}</span></td>
+                <td>
+                    <span class="template-str">{self._escape_html(t.template_str)}</span>
+                    {tag_badges}
+                </td>
                 <td>{''.join(badges)}</td>
                 <td>{first_seen}</td>
                 <td>{last_seen}</td>
             </tr>
             """)
-        
+
         return f"""
         <table>
         <thead>
@@ -782,7 +983,44 @@ function toggleCollapse(id) {{
             """)
         
         return "\n".join(sections)
-    
+
+    def _generate_alerts_section(self, alerts: List[TriggeredAlert]) -> str:
+        """生成告警部分HTML"""
+        if not alerts:
+            return """
+            <div class="anomaly-section">
+                <h3 style="color: #27ae60;">✅ 无告警触发</h3>
+            </div>
+            """
+
+        severity_colors = {
+            "critical": ("#c0392b", "#fadbd8"),
+            "warning": ("#f39c12", "#fef9e7"),
+            "info": ("#2980b9", "#d6eaf8"),
+        }
+        severity_labels = {
+            "critical": "🚨 CRITICAL",
+            "warning": "⚠️  WARNING",
+            "info": "ℹ️  INFO",
+        }
+
+        items = []
+        for a in alerts:
+            sev = a.severity.lower()
+            border_color, bg_color = severity_colors.get(sev, ("#7f8c8d", "#f2f3f4"))
+            label = severity_labels.get(sev, sev.upper())
+            items.append(f"""
+            <div class="anomaly-section" style="border-left: 6px solid {border_color}; background: {bg_color};">
+                <h3 style="color: {border_color};">{label} - {self._escape_html(a.name)}</h3>
+                <p style="font-size: 1.1em; margin: 10px 0;"><strong>{self._escape_html(a.message)}</strong></p>
+                <p style="color: #555; font-size: 0.9em;">
+                    <strong>条件:</strong> <code>{self._escape_html(a.condition)}</code><br>
+                    <strong>时间:</strong> {a.triggered_at.strftime('%Y-%m-%d %H:%M:%S')}
+                </p>
+            </div>
+            """)
+        return "\n".join(items)
+
     def _escape_html(self, text: str) -> str:
         """转义HTML特殊字符"""
         return (
