@@ -4,14 +4,24 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import typer
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
 
 from . import __version__
 from .ci import compare_templates, print_diff_report
-from .config import AppConfig, load_config, override_config
+from .config import AppConfig, CorrelateConfig, load_config, override_config
+from .correlation import (
+    AssociationRule,
+    CausalChain,
+    CorrelationAnalyzer,
+    CorrelationResult,
+)
 from .processor import LogProcessor
 from .reporter import HtmlReporter, JsonReporter, TerminalReporter
 
@@ -395,6 +405,15 @@ incremental:
 parallel:
   workers: 0            # 并行进程数：0=禁用并行(单进程)，正数=指定进程数，负数=CPU核心数一半
 
+# 日志异常关联分析
+correlate:
+  window_size: 60       # 滑动窗口大小(秒)，范围5-3600
+  min_support: 0.01     # 最小支持度阈值
+  min_confidence: 0.5   # 最小置信度阈值
+  min_lift: 2.0         # 最小提升度阈值
+  burst_threshold: 100  # 突发模板阈值(次数/窗口)
+  min_count: 10         # 模板>100时，稀有模板最小出现次数
+
 # 告警规则引擎
 # 支持的变量：new_template_count, error_template_count, spike_count,
 #            total_templates, processing_speed(行/秒)
@@ -432,6 +451,284 @@ tags:
         f.write(sample_config)
     
     print(f"示例配置文件已生成: {output_path}")
+
+
+def _print_correlation_terminal(
+    result: CorrelationResult,
+    templates: Dict[str, str],
+    top_n: int,
+):
+    """终端模式输出关联分析结果"""
+    console = Console()
+    console.print()
+    console.rule("[bold cyan]日志异常关联分析报告[/bold cyan]")
+    console.print()
+
+    summary_table = Table(show_header=True, header_style="bold magenta")
+    summary_table.add_column("指标", style="dim")
+    summary_table.add_column("值", justify="right")
+    summary_table.add_row("总事件数", f"{result.total_events:,}")
+    summary_table.add_row("模板总数", f"{result.template_count:,}")
+    summary_table.add_row("参与分析模板数", f"{result.filtered_template_count:,}")
+    summary_table.add_row("关联规则数", f"{len(result.rules):,}")
+    summary_table.add_row("突发模板数", f"{len(result.burst_templates):,}")
+    summary_table.add_row("因果链数", f"{len(result.chains):,}")
+    console.print(summary_table)
+    console.print()
+
+    if result.rules:
+        console.rule("[bold green]Top 关联规则[/bold green]")
+        console.print()
+
+        rules_table = Table(show_header=True, header_style="bold blue")
+        rules_table.add_column("#", justify="right")
+        rules_table.add_column("A → B")
+        rules_table.add_column("support", justify="right")
+        rules_table.add_column("confidence", justify="right")
+        rules_table.add_column("lift", justify="right")
+        rules_table.add_column("chi2", justify="right")
+        rules_table.add_column("jaccard", justify="right")
+        rules_table.add_column("标注")
+
+        for i, rule in enumerate(result.rules[:top_n], 1):
+            a_str = templates.get(rule.source_template_id, rule.source_template_id)
+            b_str = templates.get(rule.target_template_id, rule.target_template_id)
+            a_short = a_str[:40] + ("..." if len(a_str) > 40 else "")
+            b_short = b_str[:40] + ("..." if len(b_str) > 40 else "")
+            pair_str = f"[cyan]{rule.source_template_id}[/cyan]\n{a_short}\n  ↓\n[magenta]{rule.target_template_id}[/magenta]\n{b_short}"
+
+            annotations = []
+            if rule.is_strong_correlation:
+                annotations.append("[bold red]强关联[/bold red]")
+            if rule.is_burst:
+                annotations.append("[bold yellow]突发[/bold yellow]")
+            if rule.is_simultaneous:
+                annotations.append("[bold blue]同时[/bold blue]")
+            annotation_str = " ".join(annotations) if annotations else "-"
+
+            rules_table.add_row(
+                str(i),
+                pair_str,
+                f"{rule.support:.4f}",
+                f"{rule.confidence:.4f}",
+                f"{rule.lift:.4f}",
+                f"{rule.chi2:.4f}",
+                f"{rule.jaccard:.4f}",
+                annotation_str,
+            )
+
+        console.print(rules_table)
+        console.print()
+
+    if result.chains:
+        console.rule("[bold magenta]Top 因果链[/bold magenta]")
+        console.print()
+
+        for i, chain in enumerate(result.chains[:5], 1):
+            title = Text(f"#{i} 因果链 (长度={chain.length}, 累计conf={chain.total_confidence:.4f})")
+            title.stylize("bold")
+            console.print(title)
+
+            path_table = Table(show_header=True, header_style="bold green")
+            path_table.add_column("步骤")
+            path_table.add_column("模板")
+            path_table.add_column("模板内容", style="dim")
+            path_table.add_column("边confidence", justify="right")
+
+            for j, node in enumerate(chain.path):
+                tid = node.strip("[]").split(", ")[0] if node.startswith("[") else node
+                t_str = templates.get(tid, tid)
+                t_short = t_str[:50] + ("..." if len(t_str) > 50 else "")
+                weight_str = ""
+                if j < len(chain.edge_weights):
+                    weight_str = f"{chain.edge_weights[j]:.4f}"
+                path_table.add_row(str(j + 1), node, t_short, weight_str)
+
+            console.print(path_table)
+            console.print()
+
+
+def _output_correlation_json(
+    result: CorrelationResult,
+    templates: Dict[str, str],
+):
+    """JSON模式输出关联分析结果"""
+    rules_data = []
+    for rule in result.rules:
+        rule_dict = rule.to_dict()
+        rule_dict["source_template"] = templates.get(
+            rule.source_template_id, rule.source_template_id
+        )
+        rule_dict["target_template"] = templates.get(
+            rule.target_template_id, rule.target_template_id
+        )
+        rules_data.append(rule_dict)
+
+    chains_data = [chain.to_dict() for chain in result.chains]
+
+    output = {
+        "summary": {
+            "total_events": result.total_events,
+            "template_count": result.template_count,
+            "filtered_template_count": result.filtered_template_count,
+            "burst_template_count": len(result.burst_templates),
+            "rule_count": len(result.rules),
+            "chain_count": len(result.chains),
+        },
+        "burst_templates": list(result.burst_templates),
+        "rules": rules_data,
+        "chains": chains_data,
+    }
+    print(json.dumps(output, ensure_ascii=False, indent=2))
+
+
+def _load_state_for_correlate(
+    state_file: str,
+) -> Tuple[Dict[str, List[datetime]], Dict[str, str], List[str]]:
+    """从状态文件加载模板时序数据
+
+    Returns:
+        (template_timestamps, template_id_to_str, template_ids)
+    """
+    with open(state_file, "r", encoding="utf-8") as f:
+        state_data = json.load(f)
+
+    drain_state = state_data.get("drain_state", {})
+    templates_data = drain_state.get("templates", {})
+
+    template_timestamps: Dict[str, List[datetime]] = {}
+    template_id_to_str: Dict[str, str] = {}
+    template_ids: List[str] = []
+
+    for tid, t_data in templates_data.items():
+        template_ids.append(tid)
+        template_id_to_str[tid] = t_data.get("template_str", tid)
+
+        stats = t_data.get("stats", {})
+        first_seen_str = stats.get("first_seen")
+        last_seen_str = stats.get("last_seen")
+        count = stats.get("count", 0)
+
+        timestamps: List[datetime] = []
+        if first_seen_str and last_seen_str and count > 0:
+            try:
+                first_seen = datetime.fromisoformat(first_seen_str)
+                if count == 1:
+                    timestamps.append(first_seen)
+                else:
+                    last_seen = datetime.fromisoformat(last_seen_str)
+                    total_seconds = max(
+                        1.0, (last_seen - first_seen).total_seconds()
+                    )
+                    interval = total_seconds / max(count - 1, 1)
+                    for k in range(count):
+                        ts = first_seen.timestamp() + interval * k
+                        timestamps.append(datetime.fromtimestamp(ts))
+            except (ValueError, TypeError):
+                pass
+
+        template_timestamps[tid] = timestamps
+
+    return template_timestamps, template_id_to_str, template_ids
+
+
+def _is_state_file(file_path: str) -> bool:
+    """判断文件是否是状态文件(JSON格式)"""
+    if not file_path.endswith(".json"):
+        return False
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return "drain_state" in data and "version" in data
+    except (json.JSONDecodeError, OSError):
+        return False
+
+
+@app.command("correlate")
+def correlate(
+    file: str = typer.Argument(..., help="日志文件路径或状态文件路径(JSON)"),
+    config_path: Optional[str] = typer.Option(
+        None, "--config", "-c", help="配置文件路径"
+    ),
+    window: Optional[int] = typer.Option(
+        None, "--window", help="滑动窗口大小(秒), 范围5-3600"
+    ),
+    min_support: Optional[float] = typer.Option(
+        None, "--min-support", help="最小支持度阈值"
+    ),
+    min_confidence: Optional[float] = typer.Option(
+        None, "--min-confidence", help="最小置信度阈值"
+    ),
+    min_lift: Optional[float] = typer.Option(
+        None, "--min-lift", help="最小提升度阈值"
+    ),
+    burst_threshold: Optional[int] = typer.Option(
+        None, "--burst-threshold", help="突发模板阈值(次数/窗口)"
+    ),
+    output_format: str = typer.Option(
+        "terminal", "--format", "-f", help="输出格式: terminal/json"
+    ),
+    top_n: int = typer.Option(
+        20, "--top", help="显示前N条关联规则"
+    ),
+):
+    """日志异常关联分析 - 发现模板间时序关联与因果链"""
+
+    overrides = {}
+    if window is not None:
+        overrides["correlate.window_size"] = window
+    if min_support is not None:
+        overrides["correlate.min_support"] = min_support
+    if min_confidence is not None:
+        overrides["correlate.min_confidence"] = min_confidence
+    if min_lift is not None:
+        overrides["correlate.min_lift"] = min_lift
+    if burst_threshold is not None:
+        overrides["correlate.burst_threshold"] = burst_threshold
+
+    config = _get_config(config_path, overrides)
+    correlate_cfg = config.correlate
+
+    is_state = _is_state_file(file)
+
+    template_timestamps: Dict[str, List[datetime]]
+    template_id_to_str: Dict[str, str]
+    template_ids: List[str]
+
+    if is_state:
+        template_timestamps, template_id_to_str, template_ids = (
+            _load_state_for_correlate(file)
+        )
+    else:
+        processor = LogProcessor(config)
+        result = processor.process_files(
+            file_paths=[file],
+            incremental=False,
+            load_state=False,
+        )
+        template_timestamps = result.template_timestamps
+        template_id_to_str = {}
+        template_ids = []
+        for t in result.templates:
+            template_ids.append(t.template_id)
+            template_id_to_str[t.template_id] = t.template_str
+
+    analyzer_cfg = CorrelateConfig(
+        window_size=correlate_cfg.window_size,
+        min_support=correlate_cfg.min_support,
+        min_confidence=correlate_cfg.min_confidence,
+        min_lift=correlate_cfg.min_lift,
+        burst_threshold=correlate_cfg.burst_threshold,
+        min_count=correlate_cfg.min_count,
+    )
+    analyzer = CorrelationAnalyzer(analyzer_cfg)
+
+    corr_result = analyzer.analyze(template_timestamps, template_ids)
+
+    if output_format == "json":
+        _output_correlation_json(corr_result, template_id_to_str)
+    else:
+        _print_correlation_terminal(corr_result, template_id_to_str, top_n)
 
 
 @app.command("version")

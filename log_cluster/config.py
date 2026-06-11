@@ -16,6 +16,14 @@ DEFAULT_CONFIG = {
         "max_child": 100,
         "sim_th": 0.4,
     },
+    "correlate": {
+        "window_size": 60,
+        "min_support": 0.01,
+        "min_confidence": 0.5,
+        "min_lift": 2.0,
+        "burst_threshold": 100,
+        "min_count": 10,
+    },
     "preprocess": {
         "patterns": [
             {"name": "IP", "regex": r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"},
@@ -176,6 +184,16 @@ class ParallelConfig:
 
 
 @dataclass
+class CorrelateConfig:
+    window_size: int = 60
+    min_support: float = 0.01
+    min_confidence: float = 0.5
+    min_lift: float = 2.0
+    burst_threshold: int = 100
+    min_count: int = 10
+
+
+@dataclass
 class AlertRule:
     name: str
     condition: str
@@ -200,6 +218,7 @@ class AppConfig:
     output: OutputConfig = field(default_factory=OutputConfig)
     incremental: IncrementalConfig = field(default_factory=IncrementalConfig)
     parallel: ParallelConfig = field(default_factory=ParallelConfig)
+    correlate: CorrelateConfig = field(default_factory=CorrelateConfig)
     alerts: List[AlertRule] = field(default_factory=list)
     tags: List[TagRule] = field(default_factory=list)
 
@@ -249,6 +268,7 @@ def _dict_to_config(data: Dict[str, Any]) -> AppConfig:
     output_data = data.get("output", {})
     incremental_data = data.get("incremental", {})
     parallel_data = data.get("parallel", {})
+    correlate_data = data.get("correlate", {})
     alerts_data = data.get("alerts", [])
     tags_data = data.get("tags", [])
     
@@ -319,6 +339,14 @@ def _dict_to_config(data: Dict[str, Any]) -> AppConfig:
         ),
         parallel=ParallelConfig(
             workers=parallel_data.get("workers", 0),
+        ),
+        correlate=CorrelateConfig(
+            window_size=correlate_data.get("window_size", 60),
+            min_support=correlate_data.get("min_support", 0.01),
+            min_confidence=correlate_data.get("min_confidence", 0.5),
+            min_lift=correlate_data.get("min_lift", 2.0),
+            burst_threshold=correlate_data.get("burst_threshold", 100),
+            min_count=correlate_data.get("min_count", 10),
         ),
         alerts=alert_rules,
         tags=tag_rules,
@@ -400,6 +428,14 @@ def _config_to_dict(config: AppConfig) -> Dict[str, Any]:
         },
         "parallel": {
             "workers": config.parallel.workers,
+        },
+        "correlate": {
+            "window_size": config.correlate.window_size,
+            "min_support": config.correlate.min_support,
+            "min_confidence": config.correlate.min_confidence,
+            "min_lift": config.correlate.min_lift,
+            "burst_threshold": config.correlate.burst_threshold,
+            "min_count": config.correlate.min_count,
         },
         "alerts": [
             {
