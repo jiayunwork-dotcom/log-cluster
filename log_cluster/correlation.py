@@ -1,7 +1,9 @@
 """日志异常关联分析模块 - 关联规则挖掘与因果链发现"""
 from __future__ import annotations
 
+import json
 import math
+import os
 import sys
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
@@ -87,6 +89,65 @@ class CorrelationResult:
     filtered_template_count: int = 0
 
 
+@dataclass
+class CorrelationState:
+    """关联分析增量状态"""
+    co_occurrence: Dict[Tuple[str, str], Tuple[int, int]] = field(default_factory=dict)
+    template_counts: Dict[str, int] = field(default_factory=dict)
+    total_events: int = 0
+    last_analyzed_timestamp: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        co_occurrence_serialized: Dict[str, List[int]] = {}
+        for (a, b), (cnt, sim_cnt) in self.co_occurrence.items():
+            key = f"{a}|{b}"
+            co_occurrence_serialized[key] = [cnt, sim_cnt]
+        return {
+            "version": "1.0",
+            "co_occurrence": co_occurrence_serialized,
+            "template_counts": dict(self.template_counts),
+            "total_events": self.total_events,
+            "last_analyzed_timestamp": self.last_analyzed_timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> CorrelationState:
+        co_occurrence: Dict[Tuple[str, str], Tuple[int, int]] = {}
+        for key, counts in data.get("co_occurrence", {}).items():
+            parts = key.split("|", 1)
+            if len(parts) == 2 and len(counts) == 2:
+                co_occurrence[(parts[0], parts[1])] = (int(counts[0]), int(counts[1]))
+        return cls(
+            co_occurrence=co_occurrence,
+            template_counts={k: int(v) for k, v in data.get("template_counts", {}).items()},
+            total_events=int(data.get("total_events", 0)),
+            last_analyzed_timestamp=data.get("last_analyzed_timestamp"),
+        )
+
+
+def save_correlation_state(state: CorrelationState, path: str):
+    """保存关联分析状态到JSON文件"""
+    data = {"correlation_state": state.to_dict()}
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def load_correlation_state(path: str) -> Optional[CorrelationState]:
+    """加载关联分析状态，文件不存在返回None"""
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        state_data = data.get("correlation_state", {})
+        if not state_data:
+            return None
+        return CorrelationState.from_dict(state_data)
+    except (json.JSONDecodeError, OSError, KeyError):
+        return None
+
+
 class _TarjanSCC:
     """Tarjan算法找强连通分量"""
 
@@ -145,17 +206,20 @@ class CorrelationAnalyzer:
             )
             sys.exit(1)
         self.config = config
+        self._last_state: Optional[CorrelationState] = None
 
     def analyze(
         self,
         template_timestamps: Dict[str, List[datetime]],
         template_ids: Optional[List[str]] = None,
+        loaded_state: Optional[CorrelationState] = None,
     ) -> CorrelationResult:
         """执行关联分析
 
         Args:
             template_timestamps: 模板ID到时间戳列表的映射
             template_ids: 可选的模板ID列表（用于从状态文件加载）
+            loaded_state: 可选的已有关联状态（增量合并）
 
         Returns:
             CorrelationResult 分析结果
@@ -166,15 +230,34 @@ class CorrelationAnalyzer:
             all_template_ids = list(template_timestamps.keys())
         else:
             all_template_ids = list(template_ids)
+
+        if loaded_state is not None:
+            for tid in loaded_state.template_counts:
+                if tid not in all_template_ids:
+                    all_template_ids.append(tid)
+
         result.template_count = len(all_template_ids)
 
-        template_counts = {
+        new_template_counts = {
             tid: len(template_timestamps.get(tid, [])) for tid in all_template_ids
         }
-        total_events = sum(template_counts.values())
+        new_total_events = sum(new_template_counts.values())
+
+        template_counts = dict(new_template_counts)
+        total_events = new_total_events
+        if loaded_state is not None:
+            for tid, count in loaded_state.template_counts.items():
+                template_counts[tid] = template_counts.get(tid, 0) + count
+            total_events += loaded_state.total_events
+
         result.total_events = total_events
 
         if total_events == 0:
+            self._save_internal_state(
+                co_occurrence={}, template_counts=template_counts,
+                total_events=0, template_timestamps=template_timestamps,
+                loaded_state=loaded_state,
+            )
             return result
 
         filtered_template_ids = self._filter_rare_templates(
@@ -183,17 +266,22 @@ class CorrelationAnalyzer:
         result.filtered_template_count = len(filtered_template_ids)
 
         if len(filtered_template_ids) < 2:
+            self._save_internal_state(
+                co_occurrence={}, template_counts=template_counts,
+                total_events=total_events, template_timestamps=template_timestamps,
+                loaded_state=loaded_state,
+            )
             return result
 
         sorted_timestamps, template_id_to_events = self._build_event_sequence(
             template_timestamps, filtered_template_ids
         )
-        if not sorted_timestamps:
-            return result
 
-        burst_templates = self._detect_burst_templates(
-            template_timestamps, filtered_template_ids
-        )
+        burst_templates: Set[str] = set()
+        if sorted_timestamps:
+            burst_templates = self._detect_burst_templates(
+                template_timestamps, filtered_template_ids
+            )
         result.burst_templates = burst_templates
 
         co_occurrence: Dict[Tuple[str, str], Tuple[int, int]] = defaultdict(
@@ -201,13 +289,23 @@ class CorrelationAnalyzer:
         )
         simultaneous_pairs: Set[Tuple[str, str]] = set()
 
-        self._count_co_occurrences(
-            sorted_timestamps,
-            template_id_to_events,
-            co_occurrence,
-            simultaneous_pairs,
-            burst_templates,
-        )
+        if sorted_timestamps:
+            self._count_co_occurrences(
+                sorted_timestamps,
+                template_id_to_events,
+                co_occurrence,
+                simultaneous_pairs,
+                burst_templates,
+            )
+
+        if loaded_state is not None:
+            for key, (cnt, sim_cnt) in loaded_state.co_occurrence.items():
+                if key in co_occurrence:
+                    old_cnt, old_sim = co_occurrence[key]
+                    co_occurrence[key] = (old_cnt + cnt, old_sim + sim_cnt)
+                else:
+                    co_occurrence[key] = (cnt, sim_cnt)
+
         result.simultaneous_pairs = simultaneous_pairs
 
         rules = self._compute_rules(
@@ -230,7 +328,46 @@ class CorrelationAnalyzer:
         )
         result.chains = chains
 
+        self._save_internal_state(
+            co_occurrence=dict(co_occurrence),
+            template_counts=template_counts,
+            total_events=total_events,
+            template_timestamps=template_timestamps,
+            loaded_state=loaded_state,
+        )
+
         return result
+
+    def _save_internal_state(
+        self,
+        co_occurrence: Dict[Tuple[str, str], Tuple[int, int]],
+        template_counts: Dict[str, int],
+        total_events: int,
+        template_timestamps: Dict[str, List[datetime]],
+        loaded_state: Optional[CorrelationState],
+    ):
+        latest_ts: Optional[datetime] = None
+        for ts_list in template_timestamps.values():
+            for ts in ts_list:
+                if latest_ts is None or ts > latest_ts:
+                    latest_ts = ts
+
+        if latest_ts is not None:
+            last_analyzed_ts = latest_ts.isoformat()
+        elif loaded_state is not None and loaded_state.last_analyzed_timestamp:
+            last_analyzed_ts = loaded_state.last_analyzed_timestamp
+        else:
+            last_analyzed_ts = None
+
+        self._last_state = CorrelationState(
+            co_occurrence=co_occurrence,
+            template_counts=template_counts,
+            total_events=total_events,
+            last_analyzed_timestamp=last_analyzed_ts,
+        )
+
+    def get_state(self) -> Optional[CorrelationState]:
+        return self._last_state
 
     def _filter_rare_templates(
         self, template_ids: List[str], template_counts: Dict[str, int]

@@ -21,6 +21,9 @@ from .correlation import (
     CausalChain,
     CorrelationAnalyzer,
     CorrelationResult,
+    CorrelationState,
+    load_correlation_state,
+    save_correlation_state,
 )
 from .processor import LogProcessor
 from .reporter import HtmlReporter, JsonReporter, TerminalReporter
@@ -672,6 +675,12 @@ def correlate(
     top_n: int = typer.Option(
         20, "--top", help="显示前N条关联规则"
     ),
+    save_state: Optional[str] = typer.Option(
+        None, "--save-state", help="关联分析状态保存路径(JSON)"
+    ),
+    load_state: Optional[str] = typer.Option(
+        None, "--load-state", help="加载已有关联状态文件(JSON)，文件不存在则当作首次分析"
+    ),
 ):
     """日志异常关联分析 - 发现模板间时序关联与因果链"""
 
@@ -689,6 +698,12 @@ def correlate(
 
     config = _get_config(config_path, overrides)
     correlate_cfg = config.correlate
+
+    loaded_corr_state: Optional[CorrelationState] = None
+    if load_state is not None:
+        loaded_corr_state = load_correlation_state(load_state)
+        if loaded_corr_state is not None:
+            print(f"已加载关联状态: {load_state}")
 
     is_state = _is_state_file(file)
 
@@ -724,7 +739,15 @@ def correlate(
     )
     analyzer = CorrelationAnalyzer(analyzer_cfg)
 
-    corr_result = analyzer.analyze(template_timestamps, template_ids)
+    corr_result = analyzer.analyze(
+        template_timestamps, template_ids, loaded_state=loaded_corr_state
+    )
+
+    if save_state is not None:
+        state = analyzer.get_state()
+        if state is not None:
+            save_correlation_state(state, save_state)
+            print(f"关联状态已保存: {save_state}")
 
     if output_format == "json":
         _output_correlation_json(corr_result, template_id_to_str, top_n)
